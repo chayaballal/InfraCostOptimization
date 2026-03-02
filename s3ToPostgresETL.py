@@ -17,6 +17,8 @@ Dependencies:
 """
 
 import os
+import io
+import csv
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -72,10 +74,9 @@ def load_config() -> dict:
 # ──────────────────────────────────────────────────────────────────
 # STEP 1: EXTRACT — Read Parquet from S3
 # ──────────────────────────────────────────────────────────────────
-def extract_from_s3(cfg: dict) -> pd.DataFrame:
+def extract_from_s3(cfg: dict, engine) -> tuple[pd.DataFrame, str]:
     """
-    Read all Parquet files from S3 prefix using s3fs + pandas.
-    Supports Hive-style partitioned paths (year=.../month=.../day=...).
+    Read new Parquet files from S3 prefix using s3fs + pandas and a watermark.
     """
     s3_path = f"s3://{cfg['s3_bucket']}/{cfg['s3_prefix']}/"
     log.info(f"Reading Parquet from {s3_path} ...")
@@ -96,34 +97,36 @@ def extract_from_s3(cfg: dict) -> pd.DataFrame:
 
     log.info(f"Found {len(all_files)} Parquet file(s)")
 
-    # Optional: filter to lookback window by parsing Hive partition path
-    if cfg.get("lookback_days"):
-        cutoff_date = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=cfg["lookback_days"])
-        filtered = []
-        for f in all_files:
-            try:
-                # Parse year=/month=/day= from path
-                parts = {p.split("=")[0]: int(p.split("=")[1])
-                         for p in f.split("/") if "=" in p}
-                file_date = pd.Timestamp(
-                    year=parts["year"], month=parts["month"], day=parts["day"], tz="UTC"
-                )
-                if file_date >= cutoff_date:
-                    filtered.append(f)
-            except Exception:
-                filtered.append(f)  # include if can't parse
-        log.info(f"After {cfg['lookback_days']}-day filter: {len(filtered)} file(s)")
-        all_files = filtered
+    # Incremental Loading (Watermark logic)
+    with engine.connect() as conn:
+        conn.execute(text('''
+            CREATE TABLE IF NOT EXISTS etl_watermark (
+                process_name VARCHAR(100) PRIMARY KEY,
+                last_processed_file VARCHAR(1000)
+            )
+        '''))
+        conn.commit()
+        result = conn.execute(text("SELECT last_processed_file FROM etl_watermark WHERE process_name = 's3_metrics'")).scalar()
+        last_processed = result if result else ""
+
+    all_files = sorted(all_files)
+    new_files = [f for f in all_files if f > last_processed]
+
+    if not new_files:
+        log.info("No new files to process based on watermark.")
+        return pd.DataFrame(), last_processed
+        
+    log.info(f"Processing {len(new_files)} new file(s) since last watermark.")
 
     # Read into DataFrame
     dfs = []
-    for f in all_files:
+    for f in new_files:
         with fs.open(f, "rb") as fh:
             dfs.append(pd.read_parquet(fh))
 
     df = pd.concat(dfs, ignore_index=True)
     log.info(f"Extracted {len(df):,} raw rows from S3")
-    return df
+    return df, new_files[-1]
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -187,54 +190,54 @@ def transform_to_daily(df: pd.DataFrame) -> pd.DataFrame:
 # ──────────────────────────────────────────────────────────────────
 def upsert_to_postgres(df: pd.DataFrame, engine) -> int:
     """
-    Upsert daily-aggregated rows into ec2_metrics_latest.
-    Conflict key: (instance_id, metric_name, day_bucket)
-    On conflict: update all stat columns + loaded_at.
+    Upsert daily-aggregated rows using COPY into a staging table, 
+    followed by an INSERT ... ON CONFLICT UPDATE for fast writes.
     """
     if df.empty:
         log.warning("Nothing to upsert — DataFrame is empty.")
         return 0
 
-    records = df.to_dict(orient="records")
-    inserted = 0
+    inserted = len(df)
+    log.info(f"Upserting {inserted:,} rows using COPY and staging table...")
 
-    # Batch in chunks of 1,000 to avoid oversized transactions
-    BATCH = 1_000
-
-    def _upsert_batch(conn, batch):
-        stmt = insert(
-            _get_table_obj(conn)
-        ).values(batch)
-
-        update_cols = {
-            c.name: c
-            for c in stmt.excluded
-            if c.name not in ("instance_id", "metric_name", "day_bucket")
-        }
-        update_cols["loaded_at"] = text("NOW()")
-
-        upsert = stmt.on_conflict_do_update(
-            index_elements=["instance_id", "metric_name", "day_bucket"],
-            set_=update_cols,
-        )
-        conn.execute(upsert)
-
-    # Lazy import so we can build the table object inside the connection scope
-    from sqlalchemy import Table, MetaData
-
-    def _get_table_obj(conn):
-        meta = MetaData()
-        meta.reflect(bind=conn, only=["ec2_metrics_latest"])
-        return meta.tables["ec2_metrics_latest"]
-
-    log.info(f"Upserting {len(records):,} rows in batches of {BATCH}...")
+    # Create an in-memory CSV
+    csv_buffer = io.StringIO()
+    df.to_csv(csv_buffer, index=False, header=False, na_rep='\\N')
+    csv_buffer.seek(0)
+    
+    columns = list(df.columns)
+    columns_str = ", ".join(columns)
+    
     with engine.begin() as conn:
-        for i in range(0, len(records), BATCH):
-            chunk = records[i : i + BATCH]
-            _upsert_batch(conn, chunk)
-            inserted += len(chunk)
-            log.info(f"  Upserted {inserted:,} / {len(records):,}")
-
+        # Create temporary staging table (inherits schema)
+        conn.execute(text("""
+            CREATE TEMPORARY TABLE staging_metrics (LIKE ec2_metrics_latest INCLUDING ALL)
+            ON COMMIT DROP
+        """))
+        
+        # Get raw DBAPI connection to use 'copy_expert'
+        dbapi_conn = conn.connection.driver_connection
+        cursor = dbapi_conn.cursor()
+        
+        # COPY into staging table
+        copy_sql = f"COPY staging_metrics ({columns_str}) FROM STDIN WITH CSV NULL '\\N'"
+        cursor.copy_expert(copy_sql, csv_buffer)
+        
+        # Insert from staging into target table with ON CONFLICT UPDATE
+        update_cols = [c for c in columns if c not in ("instance_id", "metric_name", "day_bucket")]
+        # Ensure we don't accidentally try to set primary keys
+        set_clause = ", ".join([f"{c} = EXCLUDED.{c}" for c in update_cols])
+        set_clause += ", loaded_at = NOW()"
+        
+        upsert_sql = f"""
+            INSERT INTO ec2_metrics_latest ({columns_str})
+            SELECT {columns_str} FROM staging_metrics
+            ON CONFLICT (instance_id, metric_name, day_bucket) 
+            DO UPDATE SET {set_clause}
+        """
+        
+        conn.execute(text(upsert_sql))
+        
     log.info(f"Upsert complete: {inserted:,} rows processed")
     return inserted
 
@@ -327,13 +330,24 @@ def main():
     apply_schema(engine)
 
     # 1. Extract
-    raw_df = extract_from_s3(cfg)
+    raw_df, latest_file = extract_from_s3(cfg, engine)
+    
+    if raw_df.empty:
+        log.info("ETL skipped as no new data found.")
+    else:
+        # 2. Transform
+        daily_df = transform_to_daily(raw_df)
 
-    # 2. Transform
-    daily_df = transform_to_daily(raw_df)
+        # 3. Load
+        upsert_to_postgres(daily_df, engine)
 
-    # 3. Load
-    upsert_to_postgres(daily_df, engine)
+        # Update watermark
+        with engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO etl_watermark (process_name, last_processed_file)
+                VALUES ('s3_metrics', :lf)
+                ON CONFLICT (process_name) DO UPDATE SET last_processed_file = EXCLUDED.last_processed_file
+            """), {"lf": latest_file})
 
     # 4. Verify
     verify_counts(engine)

@@ -1,8 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Cell, Legend } from "recharts";
+import html2pdf from "html2pdf.js";
 
-const API = "http://localhost:8000";
+const API = "http://127.0.0.1:8000";
 
 const MD_COMPONENTS = {
   h1: ({ children }) => <h1 className="md-h1">{children}</h1>,
@@ -91,6 +93,400 @@ function CopyButton({ text }) {
   );
 }
 
+// ── PDF Report Generator ─────────────────────────────────────────
+function generatePDF(outputRef, win) {
+  if (!outputRef.current) return;
+
+  // Create a styled clone for PDF rendering
+  const el = outputRef.current.cloneNode(true);
+
+  // Remove the blinking cursor if present
+  const cursor = el.querySelector(".cursor");
+  if (cursor) cursor.remove();
+
+  // Create a wrapper with professional report styling
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = `
+    <div style="font-family: 'DM Sans', 'Segoe UI', sans-serif; color: #1c1917; padding: 40px 48px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid #e85d26; padding-bottom: 16px; margin-bottom: 32px;">
+        <div>
+          <h1 style="font-size: 22px; font-weight: 700; color: #1c1917; margin: 0;">EC2 Fleet Analysis Report</h1>
+          <p style="font-size: 12px; color: #78716c; margin: 6px 0 0;">${win}-Day Window • Generated ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+        </div>
+        <div style="text-align: right;">
+          <div style="font-size: 10px; color: #78716c; text-transform: uppercase; letter-spacing: 0.1em;">Powered by</div>
+          <div style="font-size: 13px; font-weight: 600; color: #e85d26;">EC2 Fleet Analyser</div>
+        </div>
+      </div>
+      <div id="pdf-body"></div>
+      <div style="margin-top: 40px; padding-top: 16px; border-top: 1px solid #e5e3de; display: flex; justify-content: space-between; font-size: 10px; color: #a8a29e;">
+        <span>Confidential • For internal use only</span>
+        <span>AI-generated analysis • Verify recommendations before implementation</span>
+      </div>
+    </div>
+  `;
+  wrapper.querySelector("#pdf-body").appendChild(el);
+
+  // Style tables inside the cloned content for PDF
+  wrapper.querySelectorAll("table").forEach(t => {
+    t.style.width = "100%";
+    t.style.borderCollapse = "collapse";
+    t.style.fontSize = "11px";
+    t.style.marginBottom = "16px";
+  });
+  wrapper.querySelectorAll("th").forEach(th => {
+    th.style.background = "#f5f5f4";
+    th.style.padding = "8px 10px";
+    th.style.borderBottom = "2px solid #e5e3de";
+    th.style.textAlign = "left";
+    th.style.fontSize = "10px";
+    th.style.fontWeight = "600";
+  });
+  wrapper.querySelectorAll("td").forEach(td => {
+    td.style.padding = "6px 10px";
+    td.style.borderBottom = "1px solid #f0efec";
+  });
+
+  const ts = new Date().toISOString().slice(0, 10);
+
+  const opt = {
+    margin: [0, 0, 0, 0],
+    filename: `ec2-fleet-report-${win}d-${ts}.pdf`,
+    image: { type: "jpeg", quality: 0.98 },
+    html2canvas: { scale: 2, useCORS: true, letterRendering: true },
+    jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+    pagebreak: { mode: ["avoid-all", "css", "legacy"] },
+  };
+
+  return html2pdf().set(opt).from(wrapper).save();
+}
+
+// ── Fleet Dashboard ──────────────────────────────────────────────
+function FleetDashboard({ windowDays }) {
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    fetch(`${API}/fleet-summary?window_days=${windowDays}`)
+      .then(r => r.json())
+      .then(d => setData(d.instances || []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [windowDays]);
+
+  if (loading) {
+    return (
+      <div style={{ padding: 32, display: "flex", flexDirection: "column", gap: 12 }}>
+        <div className="skeleton" style={{ height: 24, width: "30%" }} />
+        <div className="skeleton" style={{ height: 200 }} />
+        <div className="skeleton" style={{ height: 200 }} />
+      </div>
+    );
+  }
+  if (!data.length) return null;
+
+  const cpuColor = (val) => {
+    if (val == null) return "#a8a29e";
+    if (val > 80) return "#dc2626";
+    if (val > 40) return "#d97706";
+    return "#16a34a";
+  };
+
+  const memColor = (val) => {
+    if (val == null) return "#a8a29e";
+    if (val > 85) return "#dc2626";
+    if (val > 50) return "#d97706";
+    return "#16a34a";
+  };
+
+  const chartData = data.map(d => ({
+    name: d.instance_name.length > 18 ? d.instance_name.slice(0, 16) + "…" : d.instance_name,
+    fullName: d.instance_name,
+    type: d.instance_type,
+    cpu_avg: d.cpu_avg ?? 0,
+    cpu_max: d.cpu_max ?? 0,
+    mem_avg: d.mem_avg ?? 0,
+    _cpuRaw: d.cpu_avg,
+    _memRaw: d.mem_avg,
+  }));
+
+  const tooltipStyle = {
+    backgroundColor: "#fff", border: "1px solid #e5e3de",
+    borderRadius: 6, fontSize: 12, boxShadow: "0 4px 12px rgba(0,0,0,0.08)"
+  };
+
+  return (
+    <div style={{ padding: "24px 32px", display: "flex", flexDirection: "column", gap: 24 }}>
+      <div>
+        <h3 style={{
+          fontSize: 11, fontWeight: 600, letterSpacing: "0.1em",
+          textTransform: "uppercase", color: "var(--muted)", marginBottom: 14
+        }}>
+          Fleet CPU Utilization — {windowDays}d Average
+        </h3>
+        <div style={{
+          background: "var(--canvas)", border: "1px solid var(--border)",
+          borderRadius: 8, padding: "16px 8px 8px", boxShadow: "var(--shadow-sm)"
+        }}>
+          <ResponsiveContainer width="100%" height={data.length * 48 + 30}>
+            <BarChart data={chartData} layout="vertical" margin={{ top: 0, right: 30, left: 10, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e3de" horizontal={false} />
+              <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 11 }} stroke="#a8a29e" />
+              <YAxis dataKey="name" type="category" width={140} tick={{ fontSize: 11 }} stroke="#a8a29e" />
+              <RechartsTooltip
+                contentStyle={tooltipStyle}
+                formatter={(val, name, props) => [
+                  `${val.toFixed(1)}%`,
+                  name === "cpu_avg" ? "CPU Avg" : "CPU Max"
+                ]}
+                labelFormatter={(label, payload) => {
+                  if (payload && payload[0]) return `${payload[0].payload.fullName} (${payload[0].payload.type})`;
+                  return label;
+                }}
+              />
+              <Bar dataKey="cpu_avg" name="CPU Avg %" radius={[0, 4, 4, 0]} barSize={16}>
+                {chartData.map((d, i) => <Cell key={i} fill={cpuColor(d._cpuRaw)} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      <div>
+        <h3 style={{
+          fontSize: 11, fontWeight: 600, letterSpacing: "0.1em",
+          textTransform: "uppercase", color: "var(--muted)", marginBottom: 14
+        }}>
+          Fleet Memory Utilization — {windowDays}d Average
+        </h3>
+        <div style={{
+          background: "var(--canvas)", border: "1px solid var(--border)",
+          borderRadius: 8, padding: "16px 8px 8px", boxShadow: "var(--shadow-sm)"
+        }}>
+          <ResponsiveContainer width="100%" height={data.length * 48 + 30}>
+            <BarChart data={chartData} layout="vertical" margin={{ top: 0, right: 30, left: 10, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e3de" horizontal={false} />
+              <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 11 }} stroke="#a8a29e" />
+              <YAxis dataKey="name" type="category" width={140} tick={{ fontSize: 11 }} stroke="#a8a29e" />
+              <RechartsTooltip
+                contentStyle={tooltipStyle}
+                formatter={(val) => [`${val.toFixed(1)}%`, "Mem Avg"]}
+                labelFormatter={(label, payload) => {
+                  if (payload && payload[0]) return `${payload[0].payload.fullName} (${payload[0].payload.type})`;
+                  return label;
+                }}
+              />
+              <Bar dataKey="mem_avg" name="Mem Avg %" radius={[0, 4, 4, 0]} barSize={16}>
+                {chartData.map((d, i) => <Cell key={i} fill={memColor(d._memRaw)} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        {chartData.some(d => d._memRaw === 0 && d._cpuRaw > 0) && (
+          <div style={{
+            marginTop: 8, fontSize: 11, color: "var(--muted)", fontStyle: "italic",
+            display: "flex", alignItems: "center", gap: 6
+          }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            Some instances have no memory data — install CloudWatch Agent to enable memory monitoring.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Multi-Instance Compare Chart ─────────────────────────────────
+const COMPARE_COLORS = ["#e85d26", "#0891b2", "#16a34a", "#8b5cf6", "#d97706", "#ec4899"];
+function CompareChart({ instanceIds, windowDays, instances }) {
+  const [series, setSeries] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!instanceIds || instanceIds.length < 2) { setSeries([]); return; }
+    setLoading(true);
+    fetch(`${API}/timeseries-compare?ids=${instanceIds.join(",")}&window_days=${windowDays}`)
+      .then(r => r.json())
+      .then(d => setSeries(d.series || []))
+      .catch(() => setSeries([]))
+      .finally(() => setLoading(false));
+  }, [instanceIds, windowDays]);
+
+  const getName = (id) => {
+    const inst = instances.find(i => i.instance_id === id);
+    return inst ? (inst.instance_name || id) : id;
+  };
+
+  if (!instanceIds || instanceIds.length < 2) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 300, gap: 12, color: "var(--muted)" }}>
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+        </svg>
+        <div style={{ fontSize: 14, fontWeight: 500 }}>Select 2-6 instances to compare</div>
+        <div style={{ fontSize: 12 }}>Use the instance list on the left to select multiple instances, then switch to Compare view</div>
+      </div>
+    );
+  }
+  if (loading) return <div style={{ padding: 32, display: 'flex', gap: 12, flexDirection: 'column' }}><div className="skeleton" style={{height: 300}} /></div>;
+
+  return (
+    <div style={{ padding: "24px 32px", display: "flex", flexDirection: "column", gap: 28 }}>
+      <div>
+        <h3 style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 14 }}>
+          CPU Utilization Comparison — {windowDays}d
+        </h3>
+        <div style={{ background: "var(--canvas)", border: "1px solid var(--border)", borderRadius: 8, padding: "16px 8px" }}>
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={series} margin={{ top: 0, right: 20, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e3de" />
+              <XAxis dataKey="date" tick={{ fontSize: 10 }} stroke="#a8a29e" />
+              <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} stroke="#a8a29e" unit="%" />
+              <RechartsTooltip contentStyle={{ fontSize: 12, borderRadius: 6, border: "1px solid #e5e3de", boxShadow: "0 4px 12px rgba(0,0,0,0.08)" }} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              {instanceIds.map((id, idx) => (
+                <Bar key={id} dataKey={`${id}_cpu`} name={getName(id)} fill={COMPARE_COLORS[idx % COMPARE_COLORS.length]} radius={[3, 3, 0, 0]} maxBarSize={20} />
+              ))}
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+      <div>
+        <h3 style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 14 }}>
+          Memory Utilization Comparison — {windowDays}d
+        </h3>
+        <div style={{ background: "var(--canvas)", border: "1px solid var(--border)", borderRadius: 8, padding: "16px 8px" }}>
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={series} margin={{ top: 0, right: 20, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e3de" />
+              <XAxis dataKey="date" tick={{ fontSize: 10 }} stroke="#a8a29e" />
+              <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} stroke="#a8a29e" unit="%" />
+              <RechartsTooltip contentStyle={{ fontSize: 12, borderRadius: 6, border: "1px solid #e5e3de", boxShadow: "0 4px 12px rgba(0,0,0,0.08)" }} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              {instanceIds.map((id, idx) => (
+                <Bar key={id} dataKey={`${id}_mem`} name={getName(id)} fill={COMPARE_COLORS[idx % COMPARE_COLORS.length]} radius={[3, 3, 0, 0]} maxBarSize={20} />
+              ))}
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        {instanceIds.length < 2 && (
+          <div style={{ marginTop: 8, fontSize: 11, color: "var(--muted)", fontStyle: "italic" }}>Select at least 2 instances on the left to compare</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Savings Board ─────────────────────────────────────────────────
+const STATUS_COLORS = {
+  Proposed:     { color: "#0891b2", bg: "#e0f2fe" },
+  Investigating:{ color: "#d97706", bg: "#fef3c7" },
+  Implemented:  { color: "#16a34a", bg: "#dcfce7" },
+  Rejected:     { color: "#dc2626", bg: "#fee2e2" },
+};
+
+function SavingsBoard() {
+  const [entries, setEntries] = useState([]);
+  const [total, setTotal]     = useState(0);
+  const [loading, setLoading] = useState(true);
+
+  const fetchSavings = () => {
+    setLoading(true);
+    fetch(`${API}/savings`)
+      .then(r => r.json())
+      .then(d => { setEntries(d.entries || []); setTotal(d.total_implemented_saving_usd || 0); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { fetchSavings(); }, []);
+
+  const updateStatus = async (id, status) => {
+    await fetch(`${API}/savings/${id}?status=${status}`, { method: "PATCH" });
+    fetchSavings();
+  };
+
+  const statusOptions = ["Proposed", "Investigating", "Implemented", "Rejected"];
+
+  return (
+    <div style={{ padding: "24px 32px", display: "flex", flexDirection: "column", gap: 20 }}>
+      {/* Header bar */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div>
+          <h2 style={{ fontSize: 16, fontWeight: 600, color: "var(--text)" }}>Savings Tracker</h2>
+          <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>Track rightsizing recommendations from Proposed → Implemented</p>
+        </div>
+        {total > 0 && (
+          <div style={{ textAlign: "right", background: "var(--green-lt)", border: "1px solid var(--green)", borderRadius: 8, padding: "10px 16px" }}>
+            <div style={{ fontSize: 11, color: "var(--green)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.06em" }}>Implemented Savings</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "var(--green)" }}>${total.toFixed(2)}<span style={{ fontSize: 12, fontWeight: 400 }}>/mo</span></div>
+          </div>
+        )}
+      </div>
+
+      {loading ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{[1,2,3].map(i => <div key={i} className="skeleton" style={{ height: 60 }} />)}</div>
+      ) : entries.length === 0 ? (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 200, gap: 12, color: "var(--muted)" }}>
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>
+          <div style={{ fontSize: 14, fontWeight: 500 }}>No recommendations tracked yet</div>
+          <div style={{ fontSize: 12 }}>Run an analysis with Full Report, then save recommendations here</div>
+        </div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: "2px solid var(--border)" }}>
+                {["Instance","Current","Recommended","Est. Monthly Saving","Status","Date",""].map(h => (
+                  <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {entries.map(e => {
+                const sc = STATUS_COLORS[e.status] || STATUS_COLORS.Proposed;
+                return (
+                  <tr key={e.id} style={{ borderBottom: "1px solid var(--border)" }}>
+                    <td style={{ padding: "10px 12px" }}>
+                      <div style={{ fontWeight: 500, fontSize: 12 }}>{e.instance_name || e.instance_id}</div>
+                      <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--mono)" }}>{e.instance_id}</div>
+                    </td>
+                    <td style={{ padding: "10px 12px", fontSize: 12, fontFamily: "var(--mono)", color: "var(--text2)" }}>{e.current_type || "—"}</td>
+                    <td style={{ padding: "10px 12px", fontSize: 12, fontFamily: "var(--mono)", color: "var(--accent)", fontWeight: 600 }}>{e.recommended_type || "—"}</td>
+                    <td style={{ padding: "10px 12px", fontSize: 13, fontWeight: 600, color: "var(--green)" }}>
+                      {e.estimated_monthly_saving_usd != null ? `$${parseFloat(e.estimated_monthly_saving_usd).toFixed(2)}/mo` : "—"}
+                    </td>
+                    <td style={{ padding: "10px 12px" }}>
+                      <span style={{ fontWeight: 600, fontSize: 11, padding: "3px 10px", borderRadius: 12, color: sc.color, background: sc.bg }}>
+                        {e.status}
+                      </span>
+                    </td>
+                    <td style={{ padding: "10px 12px", fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>
+                      {new Date(e.created_at).toLocaleDateString()}
+                    </td>
+                    <td style={{ padding: "10px 12px" }}>
+                      <select
+                        value={e.status}
+                        onChange={ev => updateStatus(e.id, ev.target.value)}
+                        style={{ fontSize: 11, padding: "4px 8px", borderRadius: 4, border: "1px solid var(--border)", background: "var(--canvas)", cursor: "pointer", color: "var(--text)" }}
+                      >
+                        {statusOptions.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main App ──────────────────────────────────────────────────────
 export default function App() {
   const [instances, setInstances]       = useState([]);
@@ -104,6 +500,7 @@ export default function App() {
   const [error, setError]               = useState(null);
   const [loadingInst, setLoadingInst]   = useState(true);
   const [sidebarOpen, setSidebarOpen]   = useState(true);
+  const [activeView, setActiveView]     = useState("analysis"); // "analysis" | "compare" | "savings"
   const outputRef = useRef(null);
   const abortRef  = useRef(null);
 
@@ -543,8 +940,19 @@ export default function App() {
           border-bottom: 1px solid var(--border);
           flex-shrink: 0;
         }
-        .output-toolbar-left { display: flex; align-items: center; gap: 8px; }
-        .output-label { font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+         .output-toolbar-left { display: flex; align-items: center; gap: 8px; }
+         .output-toolbar-right { display: flex; align-items: center; gap: 6px; }
+         .output-label { font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+         .report-btn {
+           display: flex; align-items: center; gap: 5px;
+           padding: 6px 14px; border-radius: 6px;
+           border: 1.5px solid var(--accent); background: var(--accent-lt);
+           font-size: 12px; font-weight: 600; color: var(--accent);
+           cursor: pointer; transition: all 0.15s;
+         }
+         .report-btn:hover { background: var(--accent); color: #fff; }
+         .report-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+         .report-btn:disabled:hover { background: var(--accent-lt); color: var(--accent); }
         .output-pill {
           font-family: var(--mono); font-size: 10px; padding: 2px 8px;
           border-radius: 10px; border: 1px solid var(--border);
@@ -559,6 +967,36 @@ export default function App() {
           cursor: pointer; transition: all 0.15s;
         }
         .copy-btn:hover { border-color: var(--accent2); color: var(--accent2); background: var(--accent2-lt); }
+
+        /* View tabs */
+        .view-tabs {
+          display: flex; align-items: center; gap: 0;
+          padding: 0 20px;
+          height: 42px;
+          background: var(--canvas);
+          border-bottom: 1px solid var(--border);
+          flex-shrink: 0;
+        }
+        .view-tab {
+          display: flex; align-items: center; gap: 6px;
+          padding: 0 16px; height: 100%;
+          background: transparent; border: none;
+          font-size: 12px; font-weight: 500; color: var(--muted);
+          cursor: pointer; transition: color 0.15s;
+          border-bottom: 2px solid transparent; margin-bottom: -1px;
+        }
+        .view-tab:hover { color: var(--text); }
+        .view-tab-active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+
+        /* Save recommendation button */
+        .save-rec-btn {
+          display: flex; align-items: center; gap: 5px;
+          padding: 5px 12px; border-radius: 6px;
+          border: 1.5px solid var(--green); background: var(--green-lt);
+          font-size: 12px; font-weight: 600; color: var(--green);
+          cursor: pointer; transition: all 0.15s;
+        }
+        .save-rec-btn:hover { background: var(--green); color: #fff; }
 
         .output-area {
           flex: 1; overflow-y: auto; padding: 28px 36px;
@@ -828,8 +1266,27 @@ export default function App() {
           {/* Main */}
           <main className="main">
 
-            {/* Question bar */}
-            <div className="qbar">
+            {/* View Tab Bar */}
+            <div className="view-tabs">
+              {[
+                { id: "analysis", label: "Analysis",    icon: "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" },
+                { id: "compare",  label: selected.length >= 2 ? `Compare (${selected.length})` : "Compare", icon: "M22 12 18 12 15 21 9 3 6 12 2 12" },
+                { id: "savings",  label: "Savings Board", icon: "M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" },
+              ].map(tab => (
+                <button
+                  key={tab.id}
+                  className={`view-tab ${activeView === tab.id ? "view-tab-active" : ""}`}
+                  onClick={() => setActiveView(tab.id)}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <path d={tab.icon} />
+                  </svg>
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+            {/* Question bar — only shown in Analysis view */}
+            {activeView === "analysis" && <div className="qbar">
               <div className="qbar-icon">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                   <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
@@ -854,72 +1311,111 @@ export default function App() {
                     Analyse
                   </button>
               }
-              {output && !streaming &&
+            {activeView === "analysis" && output && !streaming &&
                 <button className="btn btn-clear"
                   onClick={() => { setOutput(""); setStatus("idle"); }}>
                   Clear
                 </button>
               }
-            </div>
+            </div>}
 
             {/* Output */}
             <div className="output-wrap">
-              {output && (
-                <div className="output-toolbar">
-                  <div className="output-toolbar-left">
-                    <span className="output-label">Analysis Report</span>
-                    <span className="output-pill">{win}d window</span>
-                    {selected.length > 0 && (
-                      <span className="output-pill">{selected.length} instance{selected.length > 1 ? "s" : ""}</span>
-                    )}
-                    {focus.map(f => (
-                      <span key={f} className="output-pill">{f.replace("_", " ")}</span>
-                    ))}
-                  </div>
-                  {!streaming && <CopyButton text={output} />}
-                </div>
+              {/* Compare view */}
+              {activeView === "compare" && (
+                <CompareChart instanceIds={selected} windowDays={win} instances={instances} />
               )}
 
-              <div className="output-area" ref={outputRef}>
-                {error && (
-                  <div className="error-box">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 1 }}>
-                      <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-                    </svg>
-                    {error}
-                  </div>
-                )}
+              {/* Savings Board view */}
+              {activeView === "savings" && (
+                <SavingsBoard />
+              )}
 
-                {!output && !error && (
-                  <div className="empty-state">
-                    <div className="empty-icon">
-                      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                        <path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/>
-                        <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
-                        <line x1="12" y1="22.08" x2="12" y2="12"/>
-                      </svg>
+              {/* Analysis view */}
+              {activeView === "analysis" && (
+                <>
+                  {output && (
+                    <div className="output-toolbar">
+                      <div className="output-toolbar-left">
+                        <span className="output-label">Analysis Report</span>
+                        <span className="output-pill">{win}d window</span>
+                        {selected.length > 0 && (
+                          <span className="output-pill">{selected.length} instance{selected.length > 1 ? "s" : ""}</span>
+                        )}
+                        {focus.map(f => (
+                          <span key={f} className="output-pill">{f.replace("_", " ")}</span>
+                        ))}
+                      </div>
+                      <div className="output-toolbar-right">
+                        {!streaming && <CopyButton text={output} />}
+                        {!streaming && status === "done" && focus.includes("full_report") && (
+                          <>
+                            <button className="save-rec-btn" onClick={async () => {
+                              // Send the raw LLM output + instance metadata to the backend.
+                              // The backend parses the markdown for recommended types server-side
+                              // (Python regex is more reliable than JS for this) and upserts all at once.
+                              const toSave = selected.length > 0 ? selected : instances.map(i => i.instance_id);
+                              const instMeta = toSave.slice(0, 30).map(iid => {
+                                const inst = instances.find(i => i.instance_id === iid);
+                                return {
+                                  instance_id:   iid,
+                                  instance_name: inst?.instance_name || null,
+                                  instance_type: inst?.instance_type || null,
+                                };
+                              });
+                              await fetch(`${API}/savings/bulk`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  markdown_text: output,
+                                  window_days:   win,
+                                  instances:     instMeta,
+                                }),
+                              });
+                              setActiveView("savings");
+                            }}>
+                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
+                              </svg>
+                              Save to Tracker
+                            </button>
+                            <button className="report-btn" onClick={() => generatePDF(outputRef, win)}>
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>
+                              </svg>
+                              Download Report
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
-                    <div className="empty-title">EC2 Fleet Analyser</div>
-                    <div className="empty-sub">
-                      Configure your analysis using the sidebar, then click Analyse to generate AI-powered rightsizing recommendations.
-                    </div>
-                    <div className="empty-chips">
-                      <span className="empty-chip">{instances.length} instances loaded</span>
-                      <span className="empty-chip">{win}d window</span>
-                      <span className="empty-chip">{focus.length} focus areas</span>
-                    </div>
-                  </div>
-                )}
+                  )}
 
-                {output && (
-                  <div>
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
-                      {output}
-                    </ReactMarkdown>
-                    {streaming && <span className="cursor" />}
+                  <div className="output-area" ref={outputRef}>
+                    {error && (
+                      <div className="error-box">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0, marginTop: 1 }}>
+                          <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                        </svg>
+                        {error}
+                      </div>
+                    )}
+
+                    {!output && !error && (
+                      <FleetDashboard windowDays={win} />
+                    )}
+
+                    {output && (
+                      <div>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
+                          {output}
+                        </ReactMarkdown>
+                        {streaming && <span className="cursor" />}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                </>
+              )}
             </div>
 
           </main>

@@ -14,17 +14,30 @@ function renderMarkdown(md) {
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/`([^`]+)`/g, '<code class="md-code">$1</code>')
     .replace(/```[\w]*\n([\s\S]*?)```/g, '<pre class="md-pre"><code>$1</code></pre>')
-    .replace(/^\| (.+) \|$/gm, (_, row) => {
-      const cells = row.split(" | ").map(c =>
-        `<td class="md-td">${c.trim()}</td>`).join("");
-      return `<tr>${cells}</tr>`;
-    })
-    .replace(/(<tr>[\s\S]*?<\/tr>)/g, (block) => {
-      const rows = block.match(/<tr>[\s\S]*?<\/tr>/g) || [];
-      if (!rows.length) return block;
-      const [header, ...body] = rows;
-      const headerRow = header.replace(/<td/g, '<th class="md-th"').replace(/<\/td>/g, '</th>');
-      return `<table class="md-table"><thead>${headerRow}</thead><tbody>${body.join("")}</tbody></table>`;
+    .replace(/((?:^\|.*\|\s*$\n?){2,})/gm, (block) => {
+      const lines = block
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
+
+      if (lines.length < 2) return block;
+
+      const parseCells = (line) =>
+        line.replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+
+      const isSeparator = (line) => /^[:\-\s|]+$/.test(line.replace(/^\||\|$/g, "").trim());
+
+      const headerCells = parseCells(lines[0]);
+      const bodyLines = isSeparator(lines[1]) ? lines.slice(2) : lines.slice(1);
+      const head = headerCells.map((c) => `<th class="md-th">${c}</th>`).join("");
+      const body = bodyLines
+        .map((line) => {
+          const cells = parseCells(line).map((c) => `<td class="md-td">${c}</td>`).join("");
+          return `<tr>${cells}</tr>`;
+        })
+        .join("");
+
+      return `<table class="md-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
     })
     .replace(/^---$/gm, '<hr class="md-hr"/>')
     .replace(/^\- (.+)$/gm, '<li class="md-li">$1</li>')

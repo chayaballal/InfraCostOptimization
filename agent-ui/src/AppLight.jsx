@@ -1,10 +1,99 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Cell, Legend } from "recharts";
 import html2pdf from "html2pdf.js";
 
 const API = "http://127.0.0.1:8000";
+
+function parseRightsizingRecommendations(markdown, instances) {
+  if (!markdown) return [];
+
+  const knownIds = new Set(instances.map(i => i.instance_id));
+  const byId = new Map(instances.map(i => [i.instance_id, i]));
+  const byName = new Map(
+    instances
+      .filter(i => i.instance_name)
+      .map(i => [String(i.instance_name).trim().toLowerCase(), i]),
+  );
+
+  const rows = markdown.split("\n");
+  const result = new Map();
+  let header = null;
+  let idx = {};
+
+  for (const line of rows) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("|")) {
+      header = null;
+      idx = {};
+      continue;
+    }
+
+    const cells = trimmed.split("|").map(c => c.trim()).filter(Boolean);
+    if (!cells.length) continue;
+
+    if (cells.every(c => /^:?-{3,}:?$/.test(c))) continue;
+
+    const lowered = cells.map(c => c.toLowerCase());
+    if (lowered.some(c => c.includes("recommend"))) {
+      header = lowered;
+      idx = {
+        instance: header.findIndex(h => h.includes("instance")),
+        current: header.findIndex(h => h.includes("current")),
+        recommend: header.findIndex(h => h.includes("recommend")),
+        reason: header.findIndex(h => h.includes("reason")),
+      };
+      continue;
+    }
+
+    if (!header || idx.recommend == null || idx.recommend < 0 || idx.recommend >= cells.length) {
+      continue;
+    }
+
+    const recommended = cells[idx.recommend].replace(/[`*]/g, "").trim();
+    if (!recommended) continue;
+    if (["keep", "no change", "same", "n/a", "none", "-", "—"].includes(recommended.toLowerCase())) {
+      continue;
+    }
+
+    let instanceId = null;
+    const rowText = cells.join(" ");
+    const idMatch = rowText.match(/\bi-[a-z0-9]+\b/i);
+    if (idMatch && knownIds.has(idMatch[0])) {
+      instanceId = idMatch[0];
+    } else if (idx.instance != null && idx.instance >= 0 && idx.instance < cells.length) {
+      const maybeName = cells[idx.instance].toLowerCase();
+      const inst = byName.get(maybeName);
+      if (inst) instanceId = inst.instance_id;
+    }
+    if (!instanceId) continue;
+
+    const inst = byId.get(instanceId);
+    const currentFromTable =
+      idx.current != null && idx.current >= 0 && idx.current < cells.length
+        ? cells[idx.current].replace(/[`*]/g, "").trim()
+        : "";
+
+    result.set(instanceId, {
+      instance_id: instanceId,
+      instance_name: inst?.instance_name || instanceId,
+      current_type: currentFromTable || inst?.instance_type || "",
+      recommended_type: recommended,
+      reason:
+        idx.reason != null && idx.reason >= 0 && idx.reason < cells.length
+          ? cells[idx.reason]
+          : "",
+    });
+  }
+
+  return Array.from(result.values());
+}
+
+function formatUsd(value) {
+  if (value == null || Number.isNaN(Number(value))) return "—";
+  return `$${Number(value).toFixed(2)}`;
+}
 
 const MD_COMPONENTS = {
   h1: ({ children }) => <h1 className="md-h1">{children}</h1>,
@@ -491,6 +580,7 @@ function SavingsBoard() {
 export default function App() {
   const [instances, setInstances]       = useState([]);
   const [selected, setSelected]         = useState([]);
+  const [analysedInstanceIds, setAnalysedInstanceIds] = useState([]);
   const [win, setWin]                   = useState(30);
   const [focus, setFocus]               = useState(["rightsizing", "risk_warnings", "full_report"]);
   const [question, setQuestion]         = useState("");
@@ -501,7 +591,9 @@ export default function App() {
   const [loadingInst, setLoadingInst]   = useState(true);
   const [sidebarOpen, setSidebarOpen]   = useState(true);
   const [activeView, setActiveView]     = useState("analysis"); // "analysis" | "compare" | "savings"
-
+  const [costComparisons, setCostComparisons] = useState([]);
+  const [costCompareLoading, setCostCompareLoading] = useState(false);
+  const [costCompareError, setCostCompareError] = useState(null);
   const outputRef = useRef(null);
   const abortRef  = useRef(null);
 
@@ -519,6 +611,78 @@ export default function App() {
     }
   }, [output]);
 
+  const recommendations = useMemo(
+    () => parseRightsizingRecommendations(output, instances),
+    [output, instances],
+  );
+  const scopedRecommendations = useMemo(() => {
+    if (!analysedInstanceIds.length) return [];
+    const allowed = new Set(analysedInstanceIds);
+    return recommendations.filter((r) => allowed.has(r.instance_id));
+  }, [recommendations, analysedInstanceIds]);
+  const totalEstimatedMonthlySavings = useMemo(
+    () =>
+      costComparisons.reduce(
+        (sum, row) => sum + Number(row?.compare?.monthly_difference_usd || 0),
+        0,
+      ),
+    [costComparisons],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function runCostCompare() {
+      if (!output || streaming || status !== "done") return;
+      if (!scopedRecommendations.length) {
+        setCostComparisons([]);
+        setCostCompareError(null);
+        return;
+      }
+
+      setCostCompareLoading(true);
+      setCostCompareError(null);
+      try {
+        const limited = scopedRecommendations.slice(0, 25);
+        const results = await Promise.all(
+          limited.map(async rec => {
+            try {
+              const resp = await fetch(`${API}/pricing/compare-by-instance`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  instance_id: rec.instance_id,
+                  recommended_type: rec.recommended_type,
+                }),
+              });
+              if (!resp.ok) {
+                const err = await resp.json().catch(() => ({}));
+                return { ...rec, compare: null, compare_error: err.detail || "Cost compare failed" };
+              }
+              const compare = await resp.json();
+              return { ...rec, compare, compare_error: null };
+            } catch (e) {
+              return { ...rec, compare: null, compare_error: e.message || "Cost compare failed" };
+            }
+          }),
+        );
+        if (!cancelled) setCostComparisons(results);
+      } catch (e) {
+        if (!cancelled) {
+          setCostComparisons([]);
+          setCostCompareError(e.message || "Unable to load cost comparison");
+        }
+      } finally {
+        if (!cancelled) setCostCompareLoading(false);
+      }
+    }
+
+    runCostCompare();
+    return () => {
+      cancelled = true;
+    };
+  }, [output, streaming, status, scopedRecommendations]);
+
   const toggleSelect = (id) =>
     setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
 
@@ -530,6 +694,8 @@ export default function App() {
     setError(null);
     setStatus("loading");
     setStreaming(true);
+    setCostComparisons([]);
+    setCostCompareError(null);
     abortRef.current = new AbortController();
 
     let finalIds = selected;
@@ -552,6 +718,9 @@ export default function App() {
         }
         const autoData = await autoRes.json();
         finalIds = autoData.instance_ids;
+        if (!finalIds.length) {
+          throw new Error("Auto-select did not match any instances for the selected window.");
+        }
         setSelected(finalIds);
       } catch (e) {
         if (e.name !== "AbortError") {
@@ -564,6 +733,7 @@ export default function App() {
         return;
       }
     }
+    setAnalysedInstanceIds(finalIds);
 
     // Report generation phase
     try {
@@ -1391,28 +1561,66 @@ export default function App() {
                         {!streaming && status === "done" && focus.includes("full_report") && (
                           <>
                             <button className="save-rec-btn" onClick={async () => {
-                              // Send the raw LLM output + instance metadata to the backend.
-                              // The backend parses the markdown for recommended types server-side
-                              // (Python regex is more reliable than JS for this) and upserts all at once.
-                              const toSave = selected.length > 0 ? selected : instances.map(i => i.instance_id);
-                              const instMeta = toSave.slice(0, 30).map(iid => {
-                                const inst = instances.find(i => i.instance_id === iid);
-                                return {
-                                  instance_id:   iid,
-                                  instance_name: inst?.instance_name || null,
-                                  instance_type: inst?.instance_type || null,
-                                };
-                              });
-                              await fetch(`${API}/savings/bulk`, {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({
-                                  markdown_text: output,
-                                  window_days:   win,
-                                  instances:     instMeta,
-                                }),
-                              });
-                              setActiveView("savings");
+                              try {
+                                const validComparisons = costComparisons.filter(
+                                  (row) => row.compare && !row.compare.skipped && !row.compare_error
+                                );
+
+                                if (validComparisons.length > 0) {
+                                  const saveCalls = validComparisons.map((row) =>
+                                    fetch(`${API}/savings`, {
+                                      method: "POST",
+                                      headers: { "Content-Type": "application/json" },
+                                      body: JSON.stringify({
+                                        instance_id: row.instance_id,
+                                        instance_name: row.instance_name || null,
+                                        current_type: row.compare?.current_type || row.current_type || null,
+                                        recommended_type: row.compare?.recommended_type || row.recommended_type || null,
+                                        recommendation: row.reason || `Cost compare recommendation (${win}d window)`,
+                                        estimated_monthly_saving_usd: row.compare?.monthly_difference_usd ?? null,
+                                        window_days: win,
+                                      }),
+                                    })
+                                  );
+
+                                  const saveResults = await Promise.all(saveCalls);
+                                  const failed = saveResults.filter((r) => !r.ok);
+                                  if (failed.length > 0) {
+                                    throw new Error(`Failed to save ${failed.length} recommendation(s)`);
+                                  }
+                                  setActiveView("savings");
+                                  return;
+                                }
+
+                                // Send the raw LLM output + instance metadata to the backend.
+                                // The backend parses the markdown for recommended types server-side
+                                // (Python regex is more reliable than JS for this) and upserts all at once.
+                                const toSave = selected.length > 0 ? selected : instances.map(i => i.instance_id);
+                                const instMeta = toSave.slice(0, 30).map(iid => {
+                                  const inst = instances.find(i => i.instance_id === iid);
+                                  return {
+                                    instance_id:   iid,
+                                    instance_name: inst?.instance_name || null,
+                                    instance_type: inst?.instance_type || null,
+                                  };
+                                });
+                                const saveRes = await fetch(`${API}/savings/bulk`, {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({
+                                    markdown_text: output,
+                                    window_days:   win,
+                                    instances:     instMeta,
+                                  }),
+                                });
+                                if (!saveRes.ok) {
+                                  const err = await saveRes.json().catch(() => ({}));
+                                  throw new Error(err.detail || "Failed to save recommendations");
+                                }
+                                setActiveView("savings");
+                              } catch (e) {
+                                setError(e.message || "Failed to save recommendations");
+                              }
                             }}>
                               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                                 <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
@@ -1447,6 +1655,98 @@ export default function App() {
 
                     {output && (
                       <div>
+                        {!streaming && status === "done" && scopedRecommendations.length > 0 && (
+                          <div style={{
+                            marginBottom: 16,
+                            border: "1px solid var(--border)",
+                            borderRadius: 8,
+                            background: "var(--canvas)",
+                            overflow: "hidden",
+                          }}>
+                            <div style={{
+                              padding: "10px 14px",
+                              borderBottom: "1px solid var(--border)",
+                              fontSize: 11,
+                              fontWeight: 600,
+                              fontFamily: "var(--mono)",
+                              letterSpacing: "0.06em",
+                              textTransform: "uppercase",
+                              color: "var(--muted)",
+                            }}>
+                              Current vs Recommended Monthly Cost
+                            </div>
+                            {!costCompareLoading && !costCompareError && costComparisons.length > 0 && (
+                              <div style={{
+                                padding: "10px 14px",
+                                borderBottom: "1px solid var(--border)",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "space-between",
+                                gap: 10,
+                              }}>
+                                <div style={{ fontSize: 12, color: "var(--text2)" }}>
+                                  Total Estimated Monthly Savings
+                                </div>
+                                <div style={{
+                                  fontSize: 15,
+                                  fontWeight: 700,
+                                  color: totalEstimatedMonthlySavings >= 0 ? "var(--green)" : "var(--red)",
+                                }}>
+                                  {formatUsd(totalEstimatedMonthlySavings)}
+                                </div>
+                              </div>
+                            )}
+                            {costCompareLoading && (
+                              <div style={{ padding: 12 }}>
+                                <div className="skeleton" style={{ height: 72 }} />
+                              </div>
+                            )}
+                            {!costCompareLoading && costCompareError && (
+                              <div style={{ padding: 12, fontSize: 12, color: "var(--red)" }}>
+                                {costCompareError}
+                              </div>
+                            )}
+                            {!costCompareLoading && !costCompareError && costComparisons.length > 0 && (
+                              <div style={{ overflowX: "auto" }}>
+                                <table className="md-table">
+                                  <thead className="md-thead">
+                                    <tr className="md-tr">
+                                      <th className="md-th">Instance</th>
+                                      <th className="md-th">Current</th>
+                                      <th className="md-th">Recommended</th>
+                                      <th className="md-th">Current $/mo</th>
+                                      <th className="md-th">Recommended $/mo</th>
+                                      <th className="md-th">Savings $/mo</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {costComparisons.map((row) => (
+                                      <tr key={row.instance_id} className="md-tr">
+                                        <td className="md-td">{row.instance_name || row.instance_id}</td>
+                                        <td className="md-td">{row.compare?.current_type || row.current_type || "—"}</td>
+                                        <td className="md-td">{row.compare?.recommended_type || "—"}</td>
+                                        <td className="md-td">{row.compare?.skipped ? "—" : formatUsd(row.compare?.current?.monthly_usd)}</td>
+                                        <td className="md-td">{row.compare?.skipped ? "—" : formatUsd(row.compare?.recommended?.monthly_usd)}</td>
+                                        <td className="md-td" style={{
+                                          color: row.compare?.skipped
+                                            ? "var(--muted)"
+                                            : (row.compare?.monthly_difference_usd ?? 0) >= 0 ? "var(--green)" : "var(--red)",
+                                          fontWeight: 600,
+                                        }}>
+                                          {row.compare_error
+                                            ? "error"
+                                            : row.compare?.skipped
+                                              ? "skipped"
+                                              : formatUsd(row.compare?.monthly_difference_usd)}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        )}
                         <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
                           {output}
                         </ReactMarkdown>

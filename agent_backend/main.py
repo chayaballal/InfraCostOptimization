@@ -22,13 +22,15 @@ import os
 import json
 import asyncio
 import logging
-from typing import Optional
+import re
+from typing import AsyncGenerator, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from sqlalchemy import text
 
 from agent_backend.database import Database
 from agent_backend.cache import AnalysisCache
@@ -36,10 +38,25 @@ from agent_backend.llm_service import LLMService
 from agent_backend.prompt_builder import PromptBuilder
 from agent_backend.savings import SavingsTracker
 from agent_backend.pricing import format_pricing_for_prompt, get_pricing_table
+from agent_backend.mcp_aws_pricing import compare_instance_costs, normalize_region
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s │ %(levelname)-8s │ %(message)s")
 log = logging.getLogger(__name__)
+
+
+def format_catalog_for_prompt(instance_types: list[str]) -> str:
+    """
+    Catalog enrichment is optional. Return empty markdown when catalog module is unavailable.
+    """
+    return ""
+
+
+def get_catalog() -> list[dict]:
+    """
+    Catalog endpoint fallback to keep API stable when catalog module is unavailable.
+    """
+    return []
 
 # ──────────────────────────────────────────────────────────────────
 # APP + SERVICE INSTANTIATION
@@ -106,6 +123,18 @@ class BulkSavingsRequest(BaseModel):
     markdown_text: str
     window_days:   int = 30
     instances:     list[dict] = []
+
+
+class CompareCostRequest(BaseModel):
+    current_type: str
+    recommended_type: str
+    region: Optional[str] = None
+
+
+class CompareCostByInstanceRequest(BaseModel):
+    instance_id: str
+    recommended_type: str
+    region: Optional[str] = None
 
 # ──────────────────────────────────────────────────────────────────
 # STARTUP
@@ -320,6 +349,137 @@ async def pricing_endpoint(instance_types: str = ""):
         log.error(f"Pricing fetch failed: {e}")
         raise HTTPException(status_code=500, detail=f"Pricing API error: {e}")
 
+
+@app.post("/pricing/compare")
+async def compare_pricing_endpoint(req: CompareCostRequest):
+    """
+    Compare the original instance cost with the recommended instance cost.
+    Uses AWS MCP pricing when enabled; falls back to local pricing module.
+    """
+    current_type = req.current_type.strip()
+    recommended_type = req.recommended_type.strip()
+    if not current_type or not recommended_type:
+        raise HTTPException(status_code=400, detail="Both current_type and recommended_type are required.")
+
+    region = normalize_region(req.region or os.getenv("AWS_REGION"))
+
+    try:
+        result = await compare_instance_costs(
+            current_type=current_type,
+            recommended_type=recommended_type,
+            region=region,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        log.error(f"Pricing compare failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Pricing compare error: {e}")
+
+    return result
+
+
+async def _get_current_instance_type(instance_id: str) -> Optional[str]:
+    """
+    Resolve current instance_type for an instance_id from latest metric rows.
+    """
+    sql = text("""
+        SELECT instance_type
+        FROM ec2_metrics_latest
+        WHERE instance_id = :iid
+          AND instance_type IS NOT NULL
+          AND instance_type <> ''
+        ORDER BY day_bucket DESC
+        LIMIT 1
+    """)
+    async with db.session_factory() as session:
+        value = await session.scalar(sql, {"iid": instance_id})
+        return value
+
+
+def _extract_instance_type(raw: str) -> Optional[str]:
+    """
+    Extract a valid EC2 instance type token from free text.
+    Example: '... recommend t4g.small for this workload' -> 't4g.small'
+    """
+    if not raw:
+        return None
+    token = raw.strip().lower()
+    # already a type
+    if re.fullmatch(r"[a-z][a-z0-9]*\d[a-z0-9]*\.[a-z0-9]+", token):
+        return token
+    # find first type-like token in longer text
+    m = re.search(r"\b([a-z][a-z0-9]*\d[a-z0-9]*\.[a-z0-9]+)\b", token)
+    return m.group(1) if m else None
+
+
+@app.post("/pricing/compare-by-instance")
+async def compare_pricing_by_instance_endpoint(req: CompareCostByInstanceRequest):
+    """
+    Compare monthly cost using current type from Postgres + recommended type from request.
+    """
+    instance_id = req.instance_id.strip()
+    recommended_type = req.recommended_type.strip()
+    if not instance_id or not recommended_type:
+        raise HTTPException(status_code=400, detail="Both instance_id and recommended_type are required.")
+
+    current_type = await _get_current_instance_type(instance_id)
+    if not current_type:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Could not resolve current instance_type for instance_id: {instance_id}",
+        )
+
+    normalized_recommended_type = _extract_instance_type(recommended_type)
+    if not normalized_recommended_type:
+        return {
+            "instance_id": instance_id,
+            "current_type": current_type,
+            "recommended_type": None,
+            "skipped": True,
+            "skip_reason": "No valid EC2 instance type token found in recommendation text.",
+            "raw_recommended_text": recommended_type,
+        }
+
+    region = normalize_region(req.region or os.getenv("AWS_REGION"))
+
+    try:
+        result = await compare_instance_costs(
+            current_type=current_type,
+            recommended_type=normalized_recommended_type,
+            region=region,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        log.error(f"Pricing compare-by-instance failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Pricing compare-by-instance error: {e}")
+
+    return {
+        "instance_id": instance_id,
+        "current_type": current_type,
+        "recommended_type": normalized_recommended_type,
+        "skipped": False,
+        **result,
+    }
+
+
+# ── Instance Catalog ─────────────────────────────────────────────
+@app.get("/instance-catalog")
+async def instance_catalog_endpoint():
+    """
+    Return the full list of current-generation EC2 instance types
+    with vCPU, memory, architecture, and network specs.
+    Auto-refreshes from AWS every 24 hours.
+    """
+    try:
+        catalog = await asyncio.get_event_loop().run_in_executor(None, get_catalog)
+        return {"count": len(catalog), "catalog": catalog}
+    except Exception as e:
+        log.error(f"Catalog endpoint error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Multi-Instance Time-Series Comparison ────────────────────────
 @app.get("/timeseries-compare")
 async def timeseries_compare(ids: str, window_days: int = 30):
     instance_ids = [i.strip() for i in ids.split(",") if i.strip()]

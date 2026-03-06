@@ -108,14 +108,14 @@ function generatePDF(outputRef, win) {
   const wrapper = document.createElement("div");
   wrapper.innerHTML = `
     <div style="font-family: 'DM Sans', 'Segoe UI', sans-serif; color: #1c1917; padding: 40px 48px;">
-      <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid #e85d26; padding-bottom: 16px; margin-bottom: 32px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 3px solid #2563eb; padding-bottom: 16px; margin-bottom: 32px;">
         <div>
           <h1 style="font-size: 22px; font-weight: 700; color: #1c1917; margin: 0;">EC2 Fleet Analysis Report</h1>
           <p style="font-size: 12px; color: #78716c; margin: 6px 0 0;">${win}-Day Window • Generated ${new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
         </div>
         <div style="text-align: right;">
           <div style="font-size: 10px; color: #78716c; text-transform: uppercase; letter-spacing: 0.1em;">Powered by</div>
-          <div style="font-size: 13px; font-weight: 600; color: #e85d26;">EC2 Fleet Analyser</div>
+          <div style="font-size: 13px; font-weight: 600; color: #2563eb;">EC2 Fleet Analyser</div>
         </div>
       </div>
       <div id="pdf-body"></div>
@@ -188,15 +188,15 @@ function FleetDashboard({ windowDays }) {
 
   const cpuColor = (val) => {
     if (val == null) return "#a8a29e";
-    if (val > 80) return "#dc2626";
-    if (val > 40) return "#d97706";
+    if (val > 80) return "#16a34a";
+    if (val > 40) return "#16a34a";
     return "#16a34a";
   };
 
   const memColor = (val) => {
     if (val == null) return "#a8a29e";
-    if (val > 85) return "#dc2626";
-    if (val > 50) return "#d97706";
+    if (val > 85) return "#16a34a";
+    if (val > 50) return "#16a34a";
     return "#16a34a";
   };
 
@@ -300,7 +300,7 @@ function FleetDashboard({ windowDays }) {
 }
 
 // ── Multi-Instance Compare Chart ─────────────────────────────────
-const COMPARE_COLORS = ["#e85d26", "#0891b2", "#16a34a", "#8b5cf6", "#d97706", "#ec4899"];
+const COMPARE_COLORS = ["#2563eb", "#0891b2", "#16a34a", "#8b5cf6", "#d97706", "#ec4899"];
 function CompareChart({ instanceIds, windowDays, instances }) {
   const [series, setSeries] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -501,6 +501,7 @@ export default function App() {
   const [loadingInst, setLoadingInst]   = useState(true);
   const [sidebarOpen, setSidebarOpen]   = useState(true);
   const [activeView, setActiveView]     = useState("analysis"); // "analysis" | "compare" | "savings"
+
   const outputRef = useRef(null);
   const abortRef  = useRef(null);
 
@@ -531,6 +532,40 @@ export default function App() {
     setStreaming(true);
     abortRef.current = new AbortController();
 
+    let finalIds = selected;
+
+    // Auto-select phase: when no instances are manually selected
+    if (finalIds.length === 0) {
+      try {
+        const autoRes = await fetch(`${API}/auto-select`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: abortRef.current.signal,
+          body: JSON.stringify({
+            window_days: win,
+            prompt: question || null,
+          }),
+        });
+        if (!autoRes.ok) {
+          const err = await autoRes.json();
+          throw new Error(err.detail || "Auto-select failed");
+        }
+        const autoData = await autoRes.json();
+        finalIds = autoData.instance_ids;
+        setSelected(finalIds);
+      } catch (e) {
+        if (e.name !== "AbortError") {
+          setError("Auto-select failed: " + e.message);
+          setStatus("error");
+        } else {
+          setStatus("idle");
+        }
+        setStreaming(false);
+        return;
+      }
+    }
+
+    // Report generation phase
     try {
       const res = await fetch(`${API}/analyse`, {
         method: "POST",
@@ -538,7 +573,7 @@ export default function App() {
         signal: abortRef.current.signal,
         body: JSON.stringify({
           window_days:  win,
-          instance_ids: selected,
+          instance_ids: finalIds,
           question:     question || null,
           focus,
         }),
@@ -630,8 +665,8 @@ export default function App() {
           --text:      #1c1917;
           --text2:     #57534e;
           --muted:     #a8a29e;
-          --accent:    #e85d26;
-          --accent-lt: #fff4ef;
+          --accent:    #2563eb;
+          --accent-lt: #eff6ff;
           --accent2:   #0891b2;
           --accent2-lt:#e0f2fe;
           --green:     #16a34a;
@@ -791,7 +826,7 @@ export default function App() {
         .window-btn.active {
           background: var(--accent); border-color: var(--accent);
           color: #fff; font-weight: 600;
-          box-shadow: 0 2px 8px rgba(232,93,38,0.25);
+          box-shadow: 0 2px 8px rgba(37,99,235,0.25);
         }
 
         /* Focus options */
@@ -857,7 +892,7 @@ export default function App() {
         .inst-card-selected {
           border-color: var(--accent) !important;
           background: var(--accent-lt) !important;
-          box-shadow: 0 0 0 3px rgba(232,93,38,0.08) !important;
+          box-shadow: 0 0 0 3px rgba(37,99,235,0.08) !important;
         }
         .inst-card-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 3px; }
         .inst-id { font-family: var(--mono); font-size: 11px; font-weight: 500; color: var(--accent2); }
@@ -870,7 +905,7 @@ export default function App() {
           border-radius: 4px; background: var(--surface); border: 1px solid var(--border);
           color: var(--text2);
         }
-        .inst-card-selected .inst-badge { background: rgba(232,93,38,0.08); border-color: rgba(232,93,38,0.2); }
+        .inst-card-selected .inst-badge { background: rgba(37,99,235,0.08); border-color: rgba(37,99,235,0.2); }
 
         /* Skeleton */
         .skeleton {
@@ -916,9 +951,9 @@ export default function App() {
         }
         .btn-primary {
           background: var(--accent); color: #fff;
-          box-shadow: 0 2px 8px rgba(232,93,38,0.3);
+          box-shadow: 0 2px 8px rgba(37,99,235,0.3);
         }
-        .btn-primary:hover { background: #d44e1a; box-shadow: 0 4px 12px rgba(232,93,38,0.4); }
+        .btn-primary:hover { background: #1d4ed8; box-shadow: 0 4px 12px rgba(37,99,235,0.4); }
         .btn-primary:disabled { background: var(--muted); box-shadow: none; cursor: not-allowed; }
         .btn-stop {
           background: var(--red-lt); color: var(--red); border: 1.5px solid var(--red);
@@ -1127,7 +1162,7 @@ export default function App() {
               </svg>
             </div>
             <div>
-              <div className="nav-logo-text">EC2 Fleet Analyser</div>
+              <div className="nav-logo-text">EC2 Analyser</div>
               <div className="nav-logo-sub">powered by Groq</div>
             </div>
           </div>
@@ -1172,7 +1207,7 @@ export default function App() {
           <div className="sbar-item">
             <span className="sbar-label">Scope</span>
             <span className="sbar-value green">
-              {selected.length === 0 ? `All ${instances.length} instances` : `${selected.length} selected`}
+              {selected.length === 0 ? "Auto-select" : `${selected.length} selected`}
             </span>
           </div>
           {output && (
@@ -1237,14 +1272,19 @@ export default function App() {
                   <div className="block-title" style={{ margin: 0 }}>Instances</div>
                   <span className="inst-count-badge">{instances.length}</span>
                 </div>
-                <button
-                  className={`inst-all-row ${selected.length === 0 ? "active" : ""}`}
-                  onClick={() => setSelected([])}>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                    <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
-                  </svg>
-                  All Instances
-                </button>
+                
+                <div style={{ display: "flex", gap: "6px", marginBottom: "12px", padding: "0 20px" }}>
+                  <button
+                    className={`inst-action-btn ${selected.length === 0 ? "active" : ""}`}
+                    onClick={() => setSelected([])}
+                    style={{ flex: 1, padding: "6px 0", fontSize: "11px", borderRadius: "6px", border: "1px solid var(--border)", background: selected.length===0 ? "var(--accent-lt)" : "var(--canvas)", color: selected.length===0 ? "var(--accent)" : "var(--text2)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "4px" }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                      <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+                    </svg>
+                    All (Auto-Select)
+                  </button>
+                </div>
+
                 <div className="inst-scroll">
                   {loadingInst
                     ? [1, 2, 3, 4].map(i => <div key={i} className="skeleton" />)
@@ -1308,7 +1348,7 @@ export default function App() {
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                       <polygon points="5 3 19 12 5 21 5 3"/>
                     </svg>
-                    Analyse
+                    {selected.length === 0 ? "Auto-Select & Analyse" : "Analyse"}
                   </button>
               }
             {activeView === "analysis" && output && !streaming &&

@@ -559,7 +559,7 @@ def generate_html_report(results: list[dict], window_days: int) -> str:
     :root {{
       --bg: #f8f7f4; --canvas: #fff; --border: #e5e3de; --border2: #d1cec7;
       --text: #1c1917; --text2: #57534e; --muted: #a8a29e;
-      --accent: #e85d26; --green: #16a34a; --amber: #d97706; --red: #dc2626; --blue: #0891b2;
+      --accent: #2563eb; --green: #16a34a; --amber: #d97706; --red: #dc2626; --blue: #0891b2;
       --mono: 'JetBrains Mono', monospace; --sans: 'DM Sans', sans-serif;
     }}
     body {{ background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; line-height: 1.6; }}

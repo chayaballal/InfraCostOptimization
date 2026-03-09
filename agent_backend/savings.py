@@ -33,6 +33,8 @@ class SavingsTracker:
         instance_name: Optional[str] = None,
         current_type: Optional[str] = None,
         recommended_type: Optional[str] = None,
+        current_monthly_cost_usd: Optional[float] = None,
+        recommended_monthly_cost_usd: Optional[float] = None,
         estimated_monthly_saving_usd: Optional[float] = None,
         window_days: Optional[int] = None,
     ) -> dict:
@@ -40,12 +42,15 @@ class SavingsTracker:
             result = await session.execute(text("""
                 INSERT INTO savings_tracker
                     (instance_id, instance_name, current_type, recommended_type,
-                     recommendation, estimated_monthly_saving_usd, window_days)
+                     recommendation, current_monthly_cost_usd, recommended_monthly_cost_usd,
+                     estimated_monthly_saving_usd, window_days)
                 VALUES
-                    (:iid, :iname, :ctype, :rtype, :rec, :saving, :win)
+                    (:iid, :iname, :ctype, :rtype, :rec, :cur_cost, :rec_cost, :saving, :win)
                 ON CONFLICT (instance_id, window_days)
                 DO UPDATE SET
                     recommended_type             = COALESCE(EXCLUDED.recommended_type, savings_tracker.recommended_type),
+                    current_monthly_cost_usd     = COALESCE(EXCLUDED.current_monthly_cost_usd, savings_tracker.current_monthly_cost_usd),
+                    recommended_monthly_cost_usd = COALESCE(EXCLUDED.recommended_monthly_cost_usd, savings_tracker.recommended_monthly_cost_usd),
                     estimated_monthly_saving_usd = COALESCE(EXCLUDED.estimated_monthly_saving_usd, savings_tracker.estimated_monthly_saving_usd),
                     instance_name                = COALESCE(EXCLUDED.instance_name, savings_tracker.instance_name),
                     current_type                 = COALESCE(EXCLUDED.current_type, savings_tracker.current_type),
@@ -58,6 +63,8 @@ class SavingsTracker:
                 "ctype":  current_type,
                 "rtype":  recommended_type,
                 "rec":    recommendation,
+                "cur_cost": current_monthly_cost_usd,
+                "rec_cost": recommended_monthly_cost_usd,
                 "saving": estimated_monthly_saving_usd,
                 "win":    window_days,
             })
@@ -84,12 +91,15 @@ class SavingsTracker:
                 result = await session.execute(text("""
                     INSERT INTO savings_tracker
                         (instance_id, instance_name, current_type, recommended_type,
-                         recommendation, estimated_monthly_saving_usd, window_days)
+                         recommendation, current_monthly_cost_usd, recommended_monthly_cost_usd,
+                         estimated_monthly_saving_usd, window_days)
                     VALUES
-                        (:iid, :iname, :ctype, :rtype, :rec, :saving, :win)
+                        (:iid, :iname, :ctype, :rtype, :rec, :cur_cost, :rec_cost, :saving, :win)
                     ON CONFLICT (instance_id, window_days)
                     DO UPDATE SET
                         recommended_type             = COALESCE(EXCLUDED.recommended_type, savings_tracker.recommended_type),
+                        current_monthly_cost_usd     = COALESCE(EXCLUDED.current_monthly_cost_usd, savings_tracker.current_monthly_cost_usd),
+                        recommended_monthly_cost_usd = COALESCE(EXCLUDED.recommended_monthly_cost_usd, savings_tracker.recommended_monthly_cost_usd),
                         estimated_monthly_saving_usd = COALESCE(EXCLUDED.estimated_monthly_saving_usd, savings_tracker.estimated_monthly_saving_usd),
                         instance_name                = COALESCE(EXCLUDED.instance_name, savings_tracker.instance_name),
                         current_type                 = COALESCE(EXCLUDED.current_type, savings_tracker.current_type),
@@ -101,6 +111,8 @@ class SavingsTracker:
                     "iname":  inst.get("instance_name"),
                     "ctype":  inst.get("instance_type"),
                     "rtype":  rec.get("recommended_type"),
+                    "cur_cost": None,
+                    "rec_cost": None,
                     "saving": rec.get("saving"),
                     "rec":    f"Full report analysis — {window_days}d window",
                     "win":    window_days,
@@ -134,10 +146,16 @@ class SavingsTracker:
 
         sql = text(f"""
             SELECT id, instance_id, instance_name, current_type, recommended_type,
-                   recommendation, estimated_monthly_saving_usd, status,
+                   recommendation, current_monthly_cost_usd, recommended_monthly_cost_usd,
+                   estimated_monthly_saving_usd, status,
                    window_days, created_at, updated_at
             FROM savings_tracker
             WHERE {' AND '.join(where)}
+              AND EXISTS (
+                  SELECT 1
+                  FROM ec2_metrics_latest m
+                  WHERE m.instance_id = savings_tracker.instance_id
+              )
             ORDER BY created_at DESC
         """)
         async with self._db.session_factory() as session:

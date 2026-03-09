@@ -481,6 +481,7 @@ function SavingsBoard() {
   const [entries, setEntries] = useState([]);
   const [total, setTotal]     = useState(0);
   const [loading, setLoading] = useState(true);
+  const [rowCosts, setRowCosts] = useState({});
 
   const fetchSavings = () => {
     setLoading(true);
@@ -492,6 +493,52 @@ function SavingsBoard() {
   };
 
   useEffect(() => { fetchSavings(); }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadRowCosts() {
+      if (!entries.length) {
+        setRowCosts({});
+        return;
+      }
+
+      const candidates = entries.filter((e) => e.instance_id && e.recommended_type);
+      if (!candidates.length) {
+        setRowCosts({});
+        return;
+      }
+
+      const pairs = await Promise.all(
+        candidates.map(async (e) => {
+          try {
+            const resp = await fetch(`${API}/pricing/compare-by-instance`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                instance_id: e.instance_id,
+                recommended_type: e.recommended_type,
+              }),
+            });
+            if (!resp.ok) return [e.id, null];
+            const compare = await resp.json();
+            return [e.id, compare];
+          } catch {
+            return [e.id, null];
+          }
+        }),
+      );
+
+      if (!cancelled) {
+        setRowCosts(Object.fromEntries(pairs));
+      }
+    }
+
+    loadRowCosts();
+    return () => {
+      cancelled = true;
+    };
+  }, [entries]);
 
   const updateStatus = async (id, status) => {
     await fetch(`${API}/savings/${id}?status=${status}`, { method: "PATCH" });
@@ -529,7 +576,7 @@ function SavingsBoard() {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: "2px solid var(--border)" }}>
-                {["Instance","Current","Recommended","Est. Monthly Saving","Status","Date",""].map(h => (
+                {["Instance","Current","Recommended","Current $/mo","Recommended $/mo","Est. Monthly Saving","Status","Date",""].map(h => (
                   <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>{h}</th>
                 ))}
               </tr>
@@ -537,16 +584,29 @@ function SavingsBoard() {
             <tbody>
               {entries.map(e => {
                 const sc = STATUS_COLORS[e.status] || STATUS_COLORS.Proposed;
+                const compare = rowCosts[e.id];
+                const estSaving = Number(compare?.monthly_difference_usd ?? e.estimated_monthly_saving_usd);
                 return (
                   <tr key={e.id} style={{ borderBottom: "1px solid var(--border)" }}>
                     <td style={{ padding: "10px 12px" }}>
                       <div style={{ fontWeight: 500, fontSize: 12 }}>{e.instance_name || e.instance_id}</div>
                       <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--mono)" }}>{e.instance_id}</div>
                     </td>
-                    <td style={{ padding: "10px 12px", fontSize: 12, fontFamily: "var(--mono)", color: "var(--text2)" }}>{e.current_type || "—"}</td>
-                    <td style={{ padding: "10px 12px", fontSize: 12, fontFamily: "var(--mono)", color: "var(--accent)", fontWeight: 600 }}>{e.recommended_type || "—"}</td>
-                    <td style={{ padding: "10px 12px", fontSize: 13, fontWeight: 600, color: "var(--green)" }}>
-                      {e.estimated_monthly_saving_usd != null ? `$${parseFloat(e.estimated_monthly_saving_usd).toFixed(2)}/mo` : "—"}
+                    <td style={{ padding: "10px 12px", fontSize: 12, fontFamily: "var(--mono)", color: "var(--text2)" }}>{compare?.current_type || e.current_type || "—"}</td>
+                    <td style={{ padding: "10px 12px", fontSize: 12, fontFamily: "var(--mono)", color: "var(--accent)", fontWeight: 600 }}>{compare?.recommended_type || e.recommended_type || "—"}</td>
+                    <td style={{ padding: "10px 12px", fontSize: 12, color: "var(--text2)", fontWeight: 600 }}>
+                      {formatUsd(compare?.current?.monthly_usd ?? e.current_monthly_cost_usd)}
+                    </td>
+                    <td style={{ padding: "10px 12px", fontSize: 12, color: "var(--text2)", fontWeight: 600 }}>
+                      {formatUsd(compare?.recommended?.monthly_usd ?? e.recommended_monthly_cost_usd)}
+                    </td>
+                    <td style={{
+                      padding: "10px 12px",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: Number.isFinite(estSaving) ? (estSaving >= 0 ? "var(--green)" : "var(--red)") : "var(--text2)",
+                    }}>
+                      {Number.isFinite(estSaving) ? `${formatUsd(estSaving)}/mo` : "-"}
                     </td>
                     <td style={{ padding: "10px 12px" }}>
                       <span style={{ fontWeight: 600, fontSize: 11, padding: "3px 10px", borderRadius: 12, color: sc.color, background: sc.bg }}>
@@ -592,8 +652,6 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen]   = useState(true);
   const [activeView, setActiveView]     = useState("analysis"); // "analysis" | "compare" | "savings"
   const [costComparisons, setCostComparisons] = useState([]);
-  const [costCompareLoading, setCostCompareLoading] = useState(false);
-  const [costCompareError, setCostCompareError] = useState(null);
   const outputRef = useRef(null);
   const abortRef  = useRef(null);
 
@@ -620,15 +678,6 @@ export default function App() {
     const allowed = new Set(analysedInstanceIds);
     return recommendations.filter((r) => allowed.has(r.instance_id));
   }, [recommendations, analysedInstanceIds]);
-  const totalEstimatedMonthlySavings = useMemo(
-    () =>
-      costComparisons.reduce(
-        (sum, row) => sum + Number(row?.compare?.monthly_difference_usd || 0),
-        0,
-      ),
-    [costComparisons],
-  );
-
   useEffect(() => {
     let cancelled = false;
 
@@ -636,12 +685,9 @@ export default function App() {
       if (!output || streaming || status !== "done") return;
       if (!scopedRecommendations.length) {
         setCostComparisons([]);
-        setCostCompareError(null);
         return;
       }
 
-      setCostCompareLoading(true);
-      setCostCompareError(null);
       try {
         const limited = scopedRecommendations.slice(0, 25);
         const results = await Promise.all(
@@ -668,12 +714,7 @@ export default function App() {
         );
         if (!cancelled) setCostComparisons(results);
       } catch (e) {
-        if (!cancelled) {
-          setCostComparisons([]);
-          setCostCompareError(e.message || "Unable to load cost comparison");
-        }
-      } finally {
-        if (!cancelled) setCostCompareLoading(false);
+        if (!cancelled) setCostComparisons([]);
       }
     }
 
@@ -695,7 +736,6 @@ export default function App() {
     setStatus("loading");
     setStreaming(true);
     setCostComparisons([]);
-    setCostCompareError(null);
     abortRef.current = new AbortController();
 
     let finalIds = selected;
@@ -1562,12 +1602,36 @@ export default function App() {
                           <>
                             <button className="save-rec-btn" onClick={async () => {
                               try {
-                                const validComparisons = costComparisons.filter(
-                                  (row) => row.compare && !row.compare.skipped && !row.compare_error
-                                );
+                                const parsed = scopedRecommendations.length ? scopedRecommendations : recommendations;
+                                const byId = new Map(costComparisons.map((r) => [r.instance_id, r]));
 
-                                if (validComparisons.length > 0) {
-                                  const saveCalls = validComparisons.map((row) =>
+                                if (parsed.length > 0) {
+                                  const compareResolved = await Promise.all(
+                                    parsed.map(async (rec) => {
+                                      const cached = byId.get(rec.instance_id);
+                                      if (cached?.compare && !cached.compare.skipped && !cached.compare_error) {
+                                        return { ...rec, compare: cached.compare };
+                                      }
+                                      try {
+                                        const resp = await fetch(`${API}/pricing/compare-by-instance`, {
+                                          method: "POST",
+                                          headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({
+                                            instance_id: rec.instance_id,
+                                            recommended_type: rec.recommended_type,
+                                          }),
+                                        });
+                                        if (!resp.ok) return { ...rec, compare: null };
+                                        const compare = await resp.json();
+                                        if (compare?.skipped) return { ...rec, compare: null };
+                                        return { ...rec, compare };
+                                      } catch {
+                                        return { ...rec, compare: null };
+                                      }
+                                    }),
+                                  );
+
+                                  const saveCalls = compareResolved.map((row) =>
                                     fetch(`${API}/savings`, {
                                       method: "POST",
                                       headers: { "Content-Type": "application/json" },
@@ -1577,10 +1641,12 @@ export default function App() {
                                         current_type: row.compare?.current_type || row.current_type || null,
                                         recommended_type: row.compare?.recommended_type || row.recommended_type || null,
                                         recommendation: row.reason || `Cost compare recommendation (${win}d window)`,
+                                        current_monthly_cost_usd: row.compare?.current?.monthly_usd ?? null,
+                                        recommended_monthly_cost_usd: row.compare?.recommended?.monthly_usd ?? null,
                                         estimated_monthly_saving_usd: row.compare?.monthly_difference_usd ?? null,
                                         window_days: win,
                                       }),
-                                    })
+                                    }),
                                   );
 
                                   const saveResults = await Promise.all(saveCalls);
@@ -1655,98 +1721,6 @@ export default function App() {
 
                     {output && (
                       <div>
-                        {!streaming && status === "done" && scopedRecommendations.length > 0 && (
-                          <div style={{
-                            marginBottom: 16,
-                            border: "1px solid var(--border)",
-                            borderRadius: 8,
-                            background: "var(--canvas)",
-                            overflow: "hidden",
-                          }}>
-                            <div style={{
-                              padding: "10px 14px",
-                              borderBottom: "1px solid var(--border)",
-                              fontSize: 11,
-                              fontWeight: 600,
-                              fontFamily: "var(--mono)",
-                              letterSpacing: "0.06em",
-                              textTransform: "uppercase",
-                              color: "var(--muted)",
-                            }}>
-                              Current vs Recommended Monthly Cost
-                            </div>
-                            {!costCompareLoading && !costCompareError && costComparisons.length > 0 && (
-                              <div style={{
-                                padding: "10px 14px",
-                                borderBottom: "1px solid var(--border)",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "space-between",
-                                gap: 10,
-                              }}>
-                                <div style={{ fontSize: 12, color: "var(--text2)" }}>
-                                  Total Estimated Monthly Savings
-                                </div>
-                                <div style={{
-                                  fontSize: 15,
-                                  fontWeight: 700,
-                                  color: totalEstimatedMonthlySavings >= 0 ? "var(--green)" : "var(--red)",
-                                }}>
-                                  {formatUsd(totalEstimatedMonthlySavings)}
-                                </div>
-                              </div>
-                            )}
-                            {costCompareLoading && (
-                              <div style={{ padding: 12 }}>
-                                <div className="skeleton" style={{ height: 72 }} />
-                              </div>
-                            )}
-                            {!costCompareLoading && costCompareError && (
-                              <div style={{ padding: 12, fontSize: 12, color: "var(--red)" }}>
-                                {costCompareError}
-                              </div>
-                            )}
-                            {!costCompareLoading && !costCompareError && costComparisons.length > 0 && (
-                              <div style={{ overflowX: "auto" }}>
-                                <table className="md-table">
-                                  <thead className="md-thead">
-                                    <tr className="md-tr">
-                                      <th className="md-th">Instance</th>
-                                      <th className="md-th">Current</th>
-                                      <th className="md-th">Recommended</th>
-                                      <th className="md-th">Current $/mo</th>
-                                      <th className="md-th">Recommended $/mo</th>
-                                      <th className="md-th">Savings $/mo</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {costComparisons.map((row) => (
-                                      <tr key={row.instance_id} className="md-tr">
-                                        <td className="md-td">{row.instance_name || row.instance_id}</td>
-                                        <td className="md-td">{row.compare?.current_type || row.current_type || "—"}</td>
-                                        <td className="md-td">{row.compare?.recommended_type || "—"}</td>
-                                        <td className="md-td">{row.compare?.skipped ? "—" : formatUsd(row.compare?.current?.monthly_usd)}</td>
-                                        <td className="md-td">{row.compare?.skipped ? "—" : formatUsd(row.compare?.recommended?.monthly_usd)}</td>
-                                        <td className="md-td" style={{
-                                          color: row.compare?.skipped
-                                            ? "var(--muted)"
-                                            : (row.compare?.monthly_difference_usd ?? 0) >= 0 ? "var(--green)" : "var(--red)",
-                                          fontWeight: 600,
-                                        }}>
-                                          {row.compare_error
-                                            ? "error"
-                                            : row.compare?.skipped
-                                              ? "skipped"
-                                              : formatUsd(row.compare?.monthly_difference_usd)}
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            )}
-                          </div>
-                        )}
                         <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
                           {output}
                         </ReactMarkdown>

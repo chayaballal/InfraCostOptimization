@@ -115,6 +115,8 @@ class SavingsEntry(BaseModel):
     current_type:                 Optional[str]   = None
     recommended_type:             Optional[str]   = None
     recommendation:               str
+    current_monthly_cost_usd:     Optional[float] = None
+    recommended_monthly_cost_usd: Optional[float] = None
     estimated_monthly_saving_usd: Optional[float] = None
     window_days:                  Optional[int]   = None
 
@@ -380,20 +382,58 @@ async def compare_pricing_endpoint(req: CompareCostRequest):
 
 async def _get_current_instance_type(instance_id: str) -> Optional[str]:
     """
-    Resolve current instance_type for an instance_id from latest metric rows.
+    Resolve current instance_type for an instance_id from available sources.
+    Tries summary-all (demo + real), then summary, then raw metrics table.
     """
-    sql = text("""
-        SELECT instance_type
-        FROM ec2_metrics_latest
-        WHERE instance_id = :iid
-          AND instance_type IS NOT NULL
-          AND instance_type <> ''
-        ORDER BY day_bucket DESC
-        LIMIT 1
-    """)
     async with db.session_factory() as session:
-        value = await session.scalar(sql, {"iid": instance_id})
-        return value
+        sources = [
+            (
+                "v_ec2_llm_summary",
+                """
+                SELECT instance_type
+                FROM v_ec2_llm_summary
+                WHERE instance_id = :iid
+                  AND instance_type IS NOT NULL
+                  AND instance_type <> ''
+                ORDER BY sample_days DESC NULLS LAST, window_days DESC
+                LIMIT 1
+                """,
+            ),
+            (
+                "v_ec2_llm_summary",
+                """
+                SELECT instance_type
+                FROM v_ec2_llm_summary
+                WHERE instance_id = :iid
+                  AND instance_type IS NOT NULL
+                  AND instance_type <> ''
+                ORDER BY sample_days DESC NULLS LAST, window_days DESC
+                LIMIT 1
+                """,
+            ),
+            (
+                "ec2_metrics_latest",
+                """
+                SELECT instance_type
+                FROM ec2_metrics_latest
+                WHERE instance_id = :iid
+                  AND instance_type IS NOT NULL
+                  AND instance_type <> ''
+                ORDER BY day_bucket DESC
+                LIMIT 1
+                """,
+            ),
+        ]
+
+        for source_name, sql_str in sources:
+            try:
+                value = await session.scalar(text(sql_str), {"iid": instance_id})
+                if value:
+                    return value
+            except Exception as e:
+                log.debug(f"Current type lookup skipped for {source_name}: {e}")
+
+        return None
 
 
 def _extract_instance_type(raw: str) -> Optional[str]:
@@ -518,6 +558,8 @@ async def create_saving(entry: SavingsEntry):
         instance_name=entry.instance_name,
         current_type=entry.current_type,
         recommended_type=entry.recommended_type,
+        current_monthly_cost_usd=entry.current_monthly_cost_usd,
+        recommended_monthly_cost_usd=entry.recommended_monthly_cost_usd,
         estimated_monthly_saving_usd=entry.estimated_monthly_saving_usd,
         window_days=entry.window_days,
     )

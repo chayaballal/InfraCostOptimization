@@ -49,6 +49,8 @@ class Database:
                         current_type                 VARCHAR(50),
                         recommended_type             VARCHAR(50),
                         recommendation               TEXT NOT NULL,
+                        current_monthly_cost_usd     NUMERIC(10,2),
+                        recommended_monthly_cost_usd NUMERIC(10,2),
                         estimated_monthly_saving_usd NUMERIC(10,2),
                         status                       VARCHAR(20) NOT NULL DEFAULT 'Proposed',
                         window_days                  INT NOT NULL DEFAULT 30,
@@ -56,6 +58,35 @@ class Database:
                         updated_at                   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                         CONSTRAINT uq_savings_instance_window UNIQUE (instance_id, window_days)
                     );
+                """))
+                await conn.execute(text("""
+                    ALTER TABLE savings_tracker
+                        ADD COLUMN IF NOT EXISTS instance_name VARCHAR(255),
+                        ADD COLUMN IF NOT EXISTS current_type VARCHAR(50),
+                        ADD COLUMN IF NOT EXISTS recommended_type VARCHAR(50),
+                        ADD COLUMN IF NOT EXISTS recommendation TEXT,
+                        ADD COLUMN IF NOT EXISTS current_monthly_cost_usd NUMERIC(10,2),
+                        ADD COLUMN IF NOT EXISTS recommended_monthly_cost_usd NUMERIC(10,2),
+                        ADD COLUMN IF NOT EXISTS estimated_monthly_saving_usd NUMERIC(10,2),
+                        ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'Proposed',
+                        ADD COLUMN IF NOT EXISTS window_days INT NOT NULL DEFAULT 30,
+                        ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+                """))
+                await conn.execute(text("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1
+                            FROM pg_constraint
+                            WHERE conname = 'uq_savings_instance_window'
+                              AND conrelid = 'savings_tracker'::regclass
+                        ) THEN
+                            ALTER TABLE savings_tracker
+                            ADD CONSTRAINT uq_savings_instance_window
+                            UNIQUE (instance_id, window_days);
+                        END IF;
+                    END $$;
                 """))
                 log.info("Ensured indexes, analysis_cache, and savings_tracker tables.")
             except Exception as e:

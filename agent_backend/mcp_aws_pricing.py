@@ -13,11 +13,15 @@ import os
 import json
 import asyncio
 import logging
+import time
 from typing import Any, Optional
 
 from agent_backend.pricing import get_pricing_table
 
 log = logging.getLogger(__name__)
+
+_PRICE_RESULT_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+_PRICE_CACHE_TTL_SECONDS = 3600
 
 DEFAULT_REGION = "us-east-1"
 VALID_REGIONS = {
@@ -170,6 +174,13 @@ async def get_price_with_mcp_fallback(instance_type: str, region: str) -> dict[s
       }
     """
     normalized_region = normalize_region(region)
+    cache_key = (instance_type.strip().lower(), normalized_region)
+    cached = _PRICE_RESULT_CACHE.get(cache_key)
+    if cached:
+        ts, payload = cached
+        if (time.time() - ts) < _PRICE_CACHE_TTL_SECONDS:
+            return dict(payload)
+
     hourly: Optional[float] = None
     source = "fallback_pricing_module"
 
@@ -192,13 +203,15 @@ async def get_price_with_mcp_fallback(instance_type: str, region: str) -> dict[s
         hourly = float(entry["hourly_usd"])
         source = "fallback_pricing_module"
 
-    return {
+    payload = {
         "instance_type": instance_type,
         "hourly_usd": round(float(hourly), 4),
         "monthly_usd": _monthly(float(hourly)),
         "source": source,
         "region": normalized_region,
     }
+    _PRICE_RESULT_CACHE[cache_key] = (time.time(), payload)
+    return dict(payload)
 
 
 async def compare_instance_costs(

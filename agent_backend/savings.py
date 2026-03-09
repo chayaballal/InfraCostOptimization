@@ -153,7 +153,7 @@ class SavingsTracker:
             WHERE {' AND '.join(where)}
               AND EXISTS (
                   SELECT 1
-                  FROM ec2_metrics_latest m
+                  FROM savings_tracker m
                   WHERE m.instance_id = savings_tracker.instance_id
               )
             ORDER BY created_at DESC

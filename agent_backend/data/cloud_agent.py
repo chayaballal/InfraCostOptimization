@@ -18,17 +18,18 @@ Dependencies:
 
 import os
 import io
-import csv
 import logging
 from datetime import datetime, timezone
-from typing import Optional
 
-import boto3
 import pandas as pd
 import s3fs
 from sqlalchemy import create_engine, text
-from sqlalchemy.dialects.postgresql import insert
 from dotenv import load_dotenv
+
+from agent_backend.data import ec2_cloudwatch_metrics
+from agent_backend.data.database import Database
+from agent_backend.agents.cost import cost_agent
+import asyncio
 
 # ──────────────────────────────────────────────────────────────────
 # LOGGING
@@ -148,7 +149,14 @@ def transform_to_daily(df: pd.DataFrame) -> pd.DataFrame:
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
     df.dropna(subset=["timestamp"], inplace=True)
     df["day_bucket"] = df["timestamp"].dt.date
-
+    
+    # Pre-calculate min/max timestamp per instance per day before grouping
+    # so we can compute the active hours (duration of metrics).
+    # Since metrics are taken at intervals (e.g. 5m), an isolated point implies at least 5m (0.083 hours).
+    ts_agg = df.groupby(["instance_id", "day_bucket"])["timestamp"].agg(["min", "max"]).reset_index()
+    ts_agg["daily_active_hours"] = (ts_agg["max"] - ts_agg["min"]).dt.total_seconds() / 3600.0
+    ts_agg["daily_active_hours"] = ts_agg["daily_active_hours"].apply(lambda x: max(0.083, x))
+    
     group_keys = [
         "instance_id", "instance_name", "instance_type",
         "metric_name", "day_bucket", "category", "unit", "az", "platform",
@@ -176,6 +184,9 @@ def transform_to_daily(df: pd.DataFrame) -> pd.DataFrame:
     for col in ["stat_average", "stat_maximum", "stat_minimum", "stat_sum"]:
         if col not in aggregated.columns:
             aggregated[col] = None
+            
+    # Merge the calculated daily_active_hours back into the aggregated dataframe
+    aggregated = aggregated.merge(ts_agg[["instance_id", "day_bucket", "daily_active_hours"]], on=["instance_id", "day_bucket"], how="left")
 
     log.info(
         f"Transformed: {len(aggregated):,} daily rows | "
@@ -200,11 +211,20 @@ def upsert_to_postgres(df: pd.DataFrame, engine) -> int:
     inserted = len(df)
     log.info(f"Upserting {inserted:,} rows using COPY and staging table...")
 
+    ensure_cols = ["instance_id", "instance_name", "instance_type", "metric_name", 
+                   "day_bucket", "category", "unit", "az", "platform", 
+                   "stat_average", "stat_maximum", "stat_minimum", "stat_sum", "daily_active_hours"]
+                   
+    for col in ensure_cols:
+        if col not in df.columns:
+            df[col] = None
+    df = df[ensure_cols]
+
     # Create an in-memory CSV
     csv_buffer = io.StringIO()
     df.to_csv(csv_buffer, index=False, header=False, na_rep='\\N')
     csv_buffer.seek(0)
-    
+
     columns = list(df.columns)
     columns_str = ", ".join(columns)
     
@@ -276,8 +296,6 @@ def preview_llm_summary(engine, window_days: int = 30, limit: int = 5):
         "SELECT instance_id, instance_name, instance_type, "
         "cpu_avg_pct, cpu_peak_pct, cpu_p95_pct, "
         "mem_avg_pct, mem_peak_pct, "
-        "ROUND(net_in_bytes_total::numeric / 1e9, 2)  AS net_in_gb, "
-        "ROUND(net_out_bytes_total::numeric / 1e9, 2) AS net_out_gb, "
         "sample_days "
         "FROM v_ec2_llm_summary "
         "WHERE window_days = :w "
@@ -329,7 +347,15 @@ def main():
     # 0. Apply schema (idempotent — safe to run every time)
     apply_schema(engine)
 
-    # 1. Extract
+    # 1. Extract from CloudWatch -> S3
+    log.info("Running CloudWatch extraction to S3...")
+    try:
+        ec2_cloudwatch_metrics.main()
+    except Exception as e:
+        log.error(f"Failed to extract metrics to S3: {e}")
+        log.info("Proceeding with existing S3 files (if any)...")
+
+    # 2. Extract from S3 -> DataFrame
     raw_df, latest_file = extract_from_s3(cfg, engine)
     
     if raw_df.empty:
@@ -354,6 +380,22 @@ def main():
 
     # 5. Preview LLM summary (30-day window)
     preview_llm_summary(engine, window_days=30)
+    
+    # 6. Pricing Sync
+    log.info("Starting persistent pricing sync...")
+    try:
+        # Get all instance types seen in the last 30 days to sync
+        with engine.connect() as conn:
+            res = conn.execute(text("SELECT DISTINCT instance_type FROM ec2_metrics_latest WHERE instance_type IS NOT NULL"))
+            instance_types = [r[0] for r in res]
+        
+        db_url_async = cfg["db_url"].replace("postgresql://", "postgresql+asyncpg://")
+        db_async = Database(db_url_async)
+        cost_agent.init_pricing(db_async)
+        asyncio.run(cost_agent.sync_prices(instance_types, os.getenv("AWS_REGION", "us-east-1")))
+        log.info(f"Price sync complete for {len(instance_types)} instance types.")
+    except Exception as e:
+        log.error(f"Pricing sync failed: {e}")
 
     log.info("=" * 65)
     log.info("  ✓ ETL complete")

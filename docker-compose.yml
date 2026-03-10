@@ -1,0 +1,80 @@
+# ── Docker Compose ───────────────────────────────────────────────────
+# Services:
+#   postgres  — PostgreSQL 16 (port 5433)
+#   backend   — FastAPI / uvicorn (port 8000)
+#   frontend  — React/Vite built and served by nginx (port 3000 → nginx 80)
+#
+# Usage:
+#   docker compose up --build          # first run
+#   docker compose up -d               # background
+#   docker compose down -v             # stop + remove volumes
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: ec2_metrics_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ec2_metrics
+      POSTGRES_USER:     metrics_user
+      POSTGRES_PASSWORD: metrics_pass
+    ports:
+      - "5433:5432"          # host:container — keeps parity with your local setup
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U metrics_user -d ec2_metrics"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Backend (FastAPI) ───────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: ec2_backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env                 # loads GROQ_API_KEY, AWS creds, S3 creds, etc.
+    environment:
+      # Override the DB_HOST to point at the postgres service name
+      DB_HOST:     postgres
+      DB_PORT:     5432      # inside Docker the postgres container exposes 5432
+      DB_NAME:     ec2_metrics
+      DB_USER:     metrics_user
+      DB_PASSWORD: metrics_pass
+      # Allow the frontend origin
+      FRONTEND_URL: http://localhost:3000
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Frontend (React → nginx) ────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        # Points the built JS bundle at the backend — resolved in the browser
+        # so it must be reachable from the user's machine.
+        VITE_API_URL: http://localhost:8000
+    container_name: ec2_frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "3000:80"
+
+volumes:
+  postgres_data:

@@ -4,7 +4,7 @@
 ║                                                                  ║
 ║  • Pulls aggregated metrics from PostgreSQL                      ║
 ║  • Formats data optimally for LLM consumption                    ║
-║  • Streams Groq LLM response (llama-3.3-70b-versatile)          ║
+║  • Streams Groq LLM response (llama-3.3-70b-versatile)           ║
 ║  • Returns rightsizing, risk warnings, full markdown report      ║
 ╚══════════════════════════════════════════════════════════════════╝
 
@@ -23,7 +23,7 @@ import json
 import asyncio
 import logging
 import re
-from typing import AsyncGenerator, Optional
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,12 +32,14 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from sqlalchemy import text
 
-from agent_backend.database import Database
+from agent_backend.data.database import Database
 from agent_backend.cache import AnalysisCache
-from agent_backend.llm_service import LLMService
-from agent_backend.prompt_builder import PromptBuilder
-from agent_backend.savings import SavingsTracker
-from agent_backend.pricing import format_pricing_for_prompt, get_pricing_table
+from agent_backend.agents.analysis.analysis_agent import LLMService, PromptBuilder
+from agent_backend.agents.orchestrator.savings import SavingsTracker
+from agent_backend.agents.cost.cost_agent import (
+    init_pricing, get_pricing_table_async, format_pricing_for_prompt, 
+    get_uptime_pricing_table, get_pricing_table, _load_from_db
+)
 from agent_backend.mcp_aws_pricing import compare_instance_costs, normalize_region
 
 load_dotenv()
@@ -79,7 +81,7 @@ app.add_middleware(
 
 DB_URL = (
     f"postgresql+asyncpg://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}"
-    f"@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT', 5432)}/{os.getenv('DB_NAME')}"
+    f"@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT', 5433)}/{os.getenv('DB_NAME')}"
 )
 
 db      = Database(DB_URL)
@@ -113,7 +115,9 @@ class SavingsEntry(BaseModel):
     instance_id:                  str
     instance_name:                Optional[str]   = None
     current_type:                 Optional[str]   = None
+    current_monthly_price_usd:    Optional[float] = None
     recommended_type:             Optional[str]   = None
+    recommended_monthly_price_usd: Optional[float] = None
     recommendation:               str
     current_monthly_cost_usd:     Optional[float] = None
     recommended_monthly_cost_usd: Optional[float] = None
@@ -143,7 +147,13 @@ class CompareCostByInstanceRequest(BaseModel):
 # ──────────────────────────────────────────────────────────────────
 @app.on_event("startup")
 async def startup_event():
+    log.info(f"Connecting to database: {DB_URL.split('@')[-1]}") # Mask password
     await db.ensure_schema()
+    
+    # Initialize Persistent Pricing
+    init_pricing(db)
+    await _load_from_db(os.getenv("AWS_REGION", "us-east-1"))
+    
     asyncio.create_task(cache.start_cleanup_loop())
 
 # ──────────────────────────────────────────────────────────────────
@@ -173,16 +183,28 @@ async def fleet_summary(window_days: int = 30):
         log.error(f"Fleet summary fetch failed: {e}")
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
+    # Build uptime lookup for this window
+    uptime_lookup: dict[str, dict] = {}
+    try:
+        uptime_rows = await db.fetch_uptime(window_days=window_days)
+        uptime_lookup = {r["instance_id"]: r for r in uptime_rows}
+    except Exception as e:
+        log.warning(f"Uptime fetch failed: {e}")
+
     instances = []
     for r in rows:
+        iid = r.get("instance_id")
+        uptime = uptime_lookup.get(iid, {})
         instances.append({
-            "instance_id":   r.get("instance_id"),
+            "instance_id":   iid,
             "instance_name": r.get("instance_name") or "unnamed",
             "instance_type": r.get("instance_type"),
             "cpu_avg":       round(float(r["cpu_avg_pct"]), 1) if r.get("cpu_avg_pct") is not None else None,
             "cpu_max":       round(float(r["cpu_peak_pct"]), 1) if r.get("cpu_peak_pct") is not None else None,
             "mem_avg":       round(float(r["mem_avg_pct"]), 1) if r.get("mem_avg_pct") is not None else None,
             "mem_max":       round(float(r["mem_peak_pct"]), 1) if r.get("mem_peak_pct") is not None else None,
+            "uptime_days":   uptime.get("uptime_days"),
+            "uptime_hours":  uptime.get("uptime_hours"),
         })
     return {"window_days": window_days, "instances": instances}
 
@@ -227,21 +249,20 @@ async def analyse(req: AnalysisRequest):
                    "Check that the ETL has run and data exists in ec2_metrics_latest."
         )
 
-    # 2. Fetch pricing + catalog (non-blocking, 3s timeout)
-    fleet_types = list({r.get("instance_type") for r in rows if r.get("instance_type")})
+    # 2. Build a deduplicated pricing table by instance type
     pricing_md = ""
     try:
-        pricing_md = await asyncio.wait_for(
-            asyncio.get_event_loop().run_in_executor(None, format_pricing_for_prompt, fleet_types),
-            timeout=3.0
-        )
+        instance_types = list({r["instance_type"] for r in rows if r.get("instance_type")})
+        # Use the new async pricing lookup that checks DB
+        await get_pricing_table_async(instance_types, os.getenv("AWS_REGION", "us-east-1"))
+        pricing_md = format_pricing_for_prompt(instance_types, os.getenv("AWS_REGION", "us-east-1"))
     except (asyncio.TimeoutError, Exception) as e:
-        log.warning(f"Pricing fetch skipped: {e}")
+        log.warning(f"Pricing fetch for prompt failed: {e}")
 
     catalog_md = ""
     try:
         catalog_md = await asyncio.wait_for(
-            asyncio.get_event_loop().run_in_executor(None, format_catalog_for_prompt, fleet_types),
+            asyncio.get_event_loop().run_in_executor(None, format_catalog_for_prompt, instance_types),
             timeout=3.0
         )
     except (asyncio.TimeoutError, Exception) as e:
@@ -451,11 +472,43 @@ def _extract_instance_type(raw: str) -> Optional[str]:
     m = re.search(r"\b([a-z][a-z0-9]*\d[a-z0-9]*\.[a-z0-9]+)\b", token)
     return m.group(1) if m else None
 
+class ParseRecommendationsRequest(BaseModel):
+    markdown_text: str
+    instances: list[dict]
+
+
+@app.post("/parse-recommendations")
+async def parse_recommendations_endpoint(req: ParseRecommendationsRequest):
+    """
+    Parse LLM markdown output server-side to extract recommended instances.
+    More resilient than relying on client-side JS parsing.
+    """
+    try:
+        rec_map = SavingsTracker.parse_recommendations(req.markdown_text, req.instances)
+        
+        # Convert dictionary map to a flat list for the frontend
+        results = []
+        for iid, data in rec_map.items():
+            results.append({
+                "instance_id": iid,
+                "recommended_type": data.get("recommended_type"),
+                "saving": data.get("saving"),
+                "current_price": data.get("current_price"),
+                "recommended_price": data.get("recommended_price")
+            })
+            
+        return {"recommendations": results}
+    except Exception as e:
+        log.error(f"Failed to parse recommendations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 
 @app.post("/pricing/compare-by-instance")
 async def compare_pricing_by_instance_endpoint(req: CompareCostByInstanceRequest):
     """
     Compare monthly cost using current type from Postgres + recommended type from request.
+    Includes uptime-based cost when uptime data is available.
     """
     instance_id = req.instance_id.strip()
     recommended_type = req.recommended_type.strip()
@@ -471,22 +524,35 @@ async def compare_pricing_by_instance_endpoint(req: CompareCostByInstanceRequest
 
     normalized_recommended_type = _extract_instance_type(recommended_type)
     if not normalized_recommended_type:
-        return {
-            "instance_id": instance_id,
-            "current_type": current_type,
-            "recommended_type": None,
-            "skipped": True,
-            "skip_reason": "No valid EC2 instance type token found in recommendation text.",
-            "raw_recommended_text": recommended_type,
-        }
+        if recommended_type.lower() in ("no change", "keep", "same"):
+            normalized_recommended_type = current_type
+        else:
+            return {
+                "instance_id": instance_id,
+                "current_type": current_type,
+                "recommended_type": None,
+                "skipped": True,
+                "skip_reason": "No valid EC2 instance type token found in recommendation text.",
+                "raw_recommended_text": recommended_type,
+            }
 
     region = normalize_region(req.region or os.getenv("AWS_REGION"))
+
+    # Lookup uptime_hours for this instance (default to 30-day window)
+    uptime_hours_val: Optional[float] = None
+    try:
+        uptime_rows = await db.fetch_uptime(window_days=30, instance_ids=[instance_id])
+        if uptime_rows:
+            uptime_hours_val = float(uptime_rows[0].get("uptime_hours", 0))
+    except Exception as e:
+        log.warning(f"Uptime lookup failed for {instance_id}: {e}")
 
     try:
         result = await compare_instance_costs(
             current_type=current_type,
             recommended_type=normalized_recommended_type,
             region=region,
+            uptime_hours=uptime_hours_val,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -502,6 +568,39 @@ async def compare_pricing_by_instance_endpoint(req: CompareCostByInstanceRequest
         **result,
     }
 
+
+# ── Uptime ────────────────────────────────────────────────────────
+
+@app.get("/uptime")
+async def get_uptime_fleet(window_days: int = 30):
+    """
+    Return per-instance uptime data and uptime costs for all instances in a window.
+    """
+    try:
+        uptime_rows = await db.fetch_uptime(window_days=window_days)
+        # Calculate uptime-based costs using the pricing layer
+        priced_uptime = get_uptime_pricing_table(uptime_rows, os.getenv("AWS_REGION", "us-east-1"))
+        return {"window_days": window_days, "uptime": priced_uptime}
+    except Exception as e:
+        log.error(f"Uptime fleet fetch failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+@app.get("/uptime/{instance_id}")
+async def get_uptime_instance(instance_id: str):
+    """
+    Return uptime data across all windows (10, 30, 60, 90) for a single instance.
+    """
+    try:
+        # fetch_uptime with window_days=None returns all windows
+        uptime_rows = await db.fetch_uptime(window_days=None, instance_ids=[instance_id])
+        if not uptime_rows:
+            return {"instance_id": instance_id, "uptime": []}
+            
+        priced_uptime = get_uptime_pricing_table(uptime_rows, os.getenv("AWS_REGION", "us-east-1"))
+        return {"instance_id": instance_id, "uptime": priced_uptime}
+    except Exception as e:
+        log.error(f"Uptime instance fetch failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
 # ── Instance Catalog ─────────────────────────────────────────────
 @app.get("/instance-catalog")
@@ -562,6 +661,8 @@ async def create_saving(entry: SavingsEntry):
         recommended_monthly_cost_usd=entry.recommended_monthly_cost_usd,
         estimated_monthly_saving_usd=entry.estimated_monthly_saving_usd,
         window_days=entry.window_days,
+        current_monthly_price_usd=entry.current_monthly_price_usd,
+        recommended_monthly_price_usd=entry.recommended_monthly_price_usd,
     )
 
 

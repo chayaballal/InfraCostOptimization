@@ -52,11 +52,22 @@ class Database:
                         current_monthly_cost_usd     NUMERIC(10,2),
                         recommended_monthly_cost_usd NUMERIC(10,2),
                         estimated_monthly_saving_usd NUMERIC(10,2),
+                        current_monthly_price_usd    NUMERIC(10,2),
+                        recommended_monthly_price_usd NUMERIC(10,2),
                         status                       VARCHAR(20) NOT NULL DEFAULT 'Proposed',
                         window_days                  INT NOT NULL DEFAULT 30,
                         created_at                   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                         updated_at                   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                        CONSTRAINT uq_savings_instance_window UNIQUE (instance_id, window_days)
+                        CONSTRAINT uq_savings_instance UNIQUE (instance_id)
+                    );
+                """))
+                await conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS ec2_instance_prices (
+                        instance_type VARCHAR(64)  NOT NULL,
+                        region        VARCHAR(64)  NOT NULL,
+                        hourly_usd    DOUBLE PRECISION NOT NULL,
+                        updated_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+                        CONSTRAINT pk_ec2_instance_prices PRIMARY KEY (instance_type, region)
                     );
                 """))
                 await conn.execute(text("""
@@ -68,6 +79,8 @@ class Database:
                         ADD COLUMN IF NOT EXISTS current_monthly_cost_usd NUMERIC(10,2),
                         ADD COLUMN IF NOT EXISTS recommended_monthly_cost_usd NUMERIC(10,2),
                         ADD COLUMN IF NOT EXISTS estimated_monthly_saving_usd NUMERIC(10,2),
+                        ADD COLUMN IF NOT EXISTS current_monthly_price_usd NUMERIC(10,2),
+                        ADD COLUMN IF NOT EXISTS recommended_monthly_price_usd NUMERIC(10,2),
                         ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'Proposed',
                         ADD COLUMN IF NOT EXISTS window_days INT NOT NULL DEFAULT 30,
                         ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -112,24 +125,14 @@ class Database:
             FROM (
                 SELECT DISTINCT ON (instance_id)
                     instance_id, instance_name, instance_type, az, platform,
-                    window_days, sample_days,
+                    window_days, sample_days, uptime_hours,
                     ROUND(cpu_avg_pct::numeric,  2) AS cpu_avg_pct,
                     ROUND(cpu_peak_pct::numeric, 2) AS cpu_peak_pct,
                     ROUND(cpu_p95_pct::numeric,  2) AS cpu_p95_pct,
                     ROUND(cpu_p99_pct::numeric,  2) AS cpu_p99_pct,
                     ROUND(mem_avg_pct::numeric,  2) AS mem_avg_pct,
                     ROUND(mem_peak_pct::numeric, 2) AS mem_peak_pct,
-                    ROUND(mem_p95_pct::numeric,  2) AS mem_p95_pct,
-                    ROUND((net_in_bytes_total  / 1e9)::numeric, 3) AS net_in_gb,
-                    ROUND((net_out_bytes_total / 1e9)::numeric, 3) AS net_out_gb,
-                    ROUND((net_in_avg_bytes    / 1e6)::numeric, 3) AS net_in_avg_mbps,
-                    ROUND((net_out_avg_bytes   / 1e6)::numeric, 3) AS net_out_avg_mbps,
-                    ROUND((disk_read_bytes_total  / 1e9)::numeric, 3) AS disk_read_gb,
-                    ROUND((disk_write_bytes_total / 1e9)::numeric, 3) AS disk_write_gb,
-                    ROUND((ebs_read_bytes_total   / 1e9)::numeric, 3) AS ebs_read_gb,
-                    ROUND((ebs_write_bytes_total  / 1e9)::numeric, 3) AS ebs_write_gb,
-                    ROUND(ebs_io_balance_avg_pct::numeric, 2) AS ebs_io_balance_pct,
-                    status_check_failures
+                    ROUND(mem_p95_pct::numeric,  2) AS mem_p95_pct
                 FROM v_ec2_llm_summary
                 WHERE {" AND ".join(where_clauses)}
                 ORDER BY instance_id,
@@ -198,6 +201,50 @@ class Database:
             result = await session.execute(sql, {"ids": instance_ids, "w": window_days})
             return [dict(r) for r in result.mappings().all()]
 
+    # ── Uptime query ──────────────────────────────────────────────
+
+    async def fetch_uptime(
+        self,
+        window_days: Optional[int] = None,
+        instance_ids: Optional[list[str]] = None,
+    ) -> list[dict]:
+        """
+        Return per-instance uptime data from v_ec2_llm_summary.
+        uptime_days = sample_days (days with metric data).
+        uptime_hours = SUM of daily_active_hours (computed from raw S3 timestamps).
+        """
+        where_clauses = []
+        params: dict = {}
+
+        if window_days is not None:
+            where_clauses.append("window_days = :w")
+            params["w"] = window_days
+
+        if instance_ids:
+            where_clauses.append("instance_id = ANY(:ids)")
+            params["ids"] = instance_ids
+
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+        sql = text(f"""
+            SELECT
+                instance_id,
+                MAX(instance_name)  AS instance_name,
+                MAX(instance_type)  AS instance_type,
+                MAX(az)             AS az,
+                MAX(platform)       AS platform,
+                window_days,
+                MAX(sample_days)    AS uptime_days,
+                MAX(uptime_hours)   AS uptime_hours
+            FROM v_ec2_llm_summary
+            {where_sql}
+            GROUP BY instance_id, window_days
+            ORDER BY instance_id, window_days
+        """)
+        async with self.session_factory() as session:
+            result = await session.execute(sql, params)
+            return [dict(r) for r in result.mappings().all()]
+
     # ── Auto-select query ─────────────────────────────────────────
 
     async def auto_select_instances(
@@ -211,3 +258,27 @@ class Database:
         async with self.session_factory() as session:
             result = await session.execute(sql, {"w": window_days})
             return [r["instance_id"] for r in result.mappings().all()]
+
+    # ── Pricing Cache ─────────────────────────────────────────────
+
+    async def get_cached_prices(self, region: str) -> dict[str, float]:
+        """Fetch all cached prices for a region from the database."""
+        sql = text("SELECT instance_type, hourly_usd FROM ec2_instance_prices WHERE region = :region")
+        async with self.session_factory() as session:
+            result = await session.execute(sql, {"region": region})
+            return {r[0]: r[1] for r in result.all()}
+
+    async def upsert_prices(self, prices: list[dict]) -> None:
+        """Add or update prices in the database."""
+        if not prices:
+            return
+        
+        sql = text("""
+            INSERT INTO ec2_instance_prices (instance_type, region, hourly_usd, updated_at)
+            VALUES (:instance_type, :region, :hourly_usd, NOW())
+            ON CONFLICT (instance_type, region) DO UPDATE SET 
+                hourly_usd = EXCLUDED.hourly_usd,
+                updated_at = NOW()
+        """)
+        async with self.engine.begin() as conn:
+            await conn.execute(sql, prices)

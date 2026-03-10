@@ -16,7 +16,7 @@ import logging
 import time
 from typing import Any, Optional
 
-from agent_backend.pricing import get_pricing_table
+# from agent_backend.agents.cost.cost_agent import get_pricing_table
 
 log = logging.getLogger(__name__)
 
@@ -196,6 +196,7 @@ async def get_price_with_mcp_fallback(instance_type: str, region: str) -> dict[s
             log.warning(f"MCP pricing lookup failed for {instance_type}: {e}")
 
     if hourly is None:
+        from agent_backend.agents.cost.cost_agent import get_pricing_table
         table = await asyncio.to_thread(get_pricing_table, [instance_type], normalized_region)
         entry = table.get(instance_type)
         if not entry:
@@ -218,6 +219,8 @@ async def compare_instance_costs(
     current_type: str,
     recommended_type: str,
     region: Optional[str] = None,
+    uptime_hours: Optional[float] = None,
+    **kwargs,
 ) -> dict[str, Any]:
     """
     Compare EC2 current vs recommended instance prices.
@@ -232,7 +235,7 @@ async def compare_instance_costs(
     if current["monthly_usd"] > 0:
         savings_pct = round((monthly_saving / current["monthly_usd"]) * 100, 2)
 
-    return {
+    res = {
         "region": normalized_region,
         "current": current,
         "recommended": recommended,
@@ -240,3 +243,10 @@ async def compare_instance_costs(
         "monthly_difference_usd": monthly_saving,
         "savings_percent": savings_pct,
     }
+
+    if uptime_hours is not None:
+        usage_saving = round(hourly_saving * uptime_hours, 2)
+        res["uptime_hours"] = uptime_hours
+        res["usage_saving_usd"] = usage_saving
+
+    return res

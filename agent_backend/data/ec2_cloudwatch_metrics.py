@@ -86,27 +86,6 @@ EC2_STANDARD_METRICS: List[Dict[str, Any]] = [
     {"metric": "CPUCreditBalance",            "stats": ["Average"],                       "category": "CPU"},
     {"metric": "CPUSurplusCreditBalance",     "stats": ["Average"],                       "category": "CPU"},
     {"metric": "CPUSurplusCreditsCharged",    "stats": ["Sum"],                           "category": "CPU"},
-    # Disk
-    {"metric": "DiskReadBytes",               "stats": ["Sum", "Average"],                "category": "Disk"},
-    {"metric": "DiskWriteBytes",              "stats": ["Sum", "Average"],                "category": "Disk"},
-    {"metric": "DiskReadOps",                 "stats": ["Sum", "Average"],                "category": "Disk"},
-    {"metric": "DiskWriteOps",                "stats": ["Sum", "Average"],                "category": "Disk"},
-    # Network
-    {"metric": "NetworkIn",                   "stats": ["Sum", "Average"],                "category": "Network"},
-    {"metric": "NetworkOut",                  "stats": ["Sum", "Average"],                "category": "Network"},
-    {"metric": "NetworkPacketsIn",            "stats": ["Sum", "Average"],                "category": "Network"},
-    {"metric": "NetworkPacketsOut",           "stats": ["Sum", "Average"],                "category": "Network"},
-    # Status Checks
-    {"metric": "StatusCheckFailed",           "stats": ["Sum"],                           "category": "StatusCheck"},
-    {"metric": "StatusCheckFailed_Instance",  "stats": ["Sum"],                           "category": "StatusCheck"},
-    {"metric": "StatusCheckFailed_System",    "stats": ["Sum"],                           "category": "StatusCheck"},
-    # EBS (Nitro instances)
-    {"metric": "EBSReadBytes",                "stats": ["Sum", "Average"],                "category": "EBS"},
-    {"metric": "EBSWriteBytes",               "stats": ["Sum", "Average"],                "category": "EBS"},
-    {"metric": "EBSReadOps",                  "stats": ["Sum", "Average"],                "category": "EBS"},
-    {"metric": "EBSWriteOps",                 "stats": ["Sum", "Average"],                "category": "EBS"},
-    {"metric": "EBSIOBalance%",               "stats": ["Average"],                       "category": "EBS"},
-    {"metric": "EBSByteBalance%",             "stats": ["Average"],                       "category": "EBS"},
 ]
 
 # ──────────────────────────────────────────────────────────────────

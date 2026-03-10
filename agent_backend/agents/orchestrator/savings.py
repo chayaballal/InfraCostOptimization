@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 savings.py — Savings Tracker CRUD + LLM markdown parser.
 
@@ -7,11 +5,14 @@ Handles all savings_tracker table operations and the
 recommendation-parsing logic for bulk saves.
 """
 
+from __future__ import annotations
+
 import re
 import logging
 from typing import Optional
 
 from sqlalchemy import text
+from agent_backend.mcp_aws_pricing import get_price_with_mcp_fallback
 
 log = logging.getLogger(__name__)
 
@@ -37,24 +38,30 @@ class SavingsTracker:
         recommended_monthly_cost_usd: Optional[float] = None,
         estimated_monthly_saving_usd: Optional[float] = None,
         window_days: Optional[int] = None,
+        current_monthly_price_usd: Optional[float] = None,
+        recommended_monthly_price_usd: Optional[float] = None,
     ) -> dict:
         async with self._db.session_factory() as session:
             result = await session.execute(text("""
                 INSERT INTO savings_tracker
                     (instance_id, instance_name, current_type, recommended_type,
                      recommendation, current_monthly_cost_usd, recommended_monthly_cost_usd,
-                     estimated_monthly_saving_usd, window_days)
+                     estimated_monthly_saving_usd, window_days,
+                     current_monthly_price_usd, recommended_monthly_price_usd)
                 VALUES
-                    (:iid, :iname, :ctype, :rtype, :rec, :cur_cost, :rec_cost, :saving, :win)
-                ON CONFLICT (instance_id, window_days)
+                    (:iid, :iname, :ctype, :rtype, :rec, :cur_cost, :rec_cost, :saving, :win, :cprice, :rprice)
+                ON CONFLICT (instance_id)
                 DO UPDATE SET
                     recommended_type             = COALESCE(EXCLUDED.recommended_type, savings_tracker.recommended_type),
                     current_monthly_cost_usd     = COALESCE(EXCLUDED.current_monthly_cost_usd, savings_tracker.current_monthly_cost_usd),
                     recommended_monthly_cost_usd = COALESCE(EXCLUDED.recommended_monthly_cost_usd, savings_tracker.recommended_monthly_cost_usd),
                     estimated_monthly_saving_usd = COALESCE(EXCLUDED.estimated_monthly_saving_usd, savings_tracker.estimated_monthly_saving_usd),
+                    current_monthly_price_usd    = COALESCE(EXCLUDED.current_monthly_price_usd, savings_tracker.current_monthly_price_usd),
+                    recommended_monthly_price_usd = COALESCE(EXCLUDED.recommended_monthly_price_usd, savings_tracker.recommended_monthly_price_usd),
                     instance_name                = COALESCE(EXCLUDED.instance_name, savings_tracker.instance_name),
                     current_type                 = COALESCE(EXCLUDED.current_type, savings_tracker.current_type),
                     recommendation               = EXCLUDED.recommendation,
+                    window_days                  = COALESCE(EXCLUDED.window_days, savings_tracker.window_days),
                     updated_at                   = NOW()
                 RETURNING id, created_at, status
             """), {
@@ -67,6 +74,8 @@ class SavingsTracker:
                 "rec_cost": recommended_monthly_cost_usd,
                 "saving": estimated_monthly_saving_usd,
                 "win":    window_days,
+                "cprice": current_monthly_price_usd,
+                "rprice": recommended_monthly_price_usd,
             })
             await session.commit()
             row = result.mappings().fetchone()
@@ -88,22 +97,55 @@ class SavingsTracker:
             for inst in instances:
                 iid = inst.get("instance_id")
                 rec = rec_map.get(iid, {})
+                # Structured prices sent by frontend (meta) or parsed from markdown (rec)
+                cprice = inst.get("current_monthly_price_usd") or rec.get("current_price")
+                rprice = inst.get("recommended_monthly_price_usd") or rec.get("recommended_price")
+
+                # Fallback to fetching prices if missing
+                if cprice is None and inst.get("instance_type"):
+                    try:
+                        p_data = await get_price_with_mcp_fallback(inst["instance_type"], "us-east-1")
+                        cprice = p_data.get("monthly_usd")
+                    except Exception as e:
+                        log.warning(f"Failed fallback cprice fetch for {iid}: {e}")
+
+                if rprice is None and rec.get("recommended_type"):
+                    rtype_norm = rec["recommended_type"]
+                    # Quick extraction if it's a "t3.medium (Save $...)" string
+                    m = re.search(r"([a-z0-9]+\.[a-z0-9]+)", rtype_norm.lower())
+                    if m:
+                        rtype_norm = m.group(1)
+                    
+                    try:
+                        p_data = await get_price_with_mcp_fallback(rtype_norm, "us-east-1")
+                        rprice = p_data.get("monthly_usd")
+                    except Exception as e:
+                        log.warning(f"Failed fallback rprice fetch for {iid}: {e}")
+
+                # Calculate savings if pieces are missing from markdown but sent in meta
+                if (cprice is not None and rprice is not None):
+                    rec["saving"] = round(float(cprice) - float(rprice), 2)
+
                 result = await session.execute(text("""
                     INSERT INTO savings_tracker
                         (instance_id, instance_name, current_type, recommended_type,
                          recommendation, current_monthly_cost_usd, recommended_monthly_cost_usd,
-                         estimated_monthly_saving_usd, window_days)
+                         estimated_monthly_saving_usd, window_days,
+                         current_monthly_price_usd, recommended_monthly_price_usd)
                     VALUES
-                        (:iid, :iname, :ctype, :rtype, :rec, :cur_cost, :rec_cost, :saving, :win)
-                    ON CONFLICT (instance_id, window_days)
+                        (:iid, :iname, :ctype, :rtype, :rec, :cur_cost, :rec_cost, :saving, :win, :cprice, :rprice)
+                    ON CONFLICT (instance_id)
                     DO UPDATE SET
                         recommended_type             = COALESCE(EXCLUDED.recommended_type, savings_tracker.recommended_type),
                         current_monthly_cost_usd     = COALESCE(EXCLUDED.current_monthly_cost_usd, savings_tracker.current_monthly_cost_usd),
                         recommended_monthly_cost_usd = COALESCE(EXCLUDED.recommended_monthly_cost_usd, savings_tracker.recommended_monthly_cost_usd),
                         estimated_monthly_saving_usd = COALESCE(EXCLUDED.estimated_monthly_saving_usd, savings_tracker.estimated_monthly_saving_usd),
+                        current_monthly_price_usd    = COALESCE(EXCLUDED.current_monthly_price_usd, savings_tracker.current_monthly_price_usd),
+                        recommended_monthly_price_usd = COALESCE(EXCLUDED.recommended_monthly_price_usd, savings_tracker.recommended_monthly_price_usd),
                         instance_name                = COALESCE(EXCLUDED.instance_name, savings_tracker.instance_name),
                         current_type                 = COALESCE(EXCLUDED.current_type, savings_tracker.current_type),
                         recommendation               = EXCLUDED.recommendation,
+                        window_days                  = COALESCE(EXCLUDED.window_days, savings_tracker.window_days),
                         updated_at                   = NOW()
                     RETURNING id, status
                 """), {
@@ -116,6 +158,8 @@ class SavingsTracker:
                     "saving": rec.get("saving"),
                     "rec":    f"Full report analysis — {window_days}d window",
                     "win":    window_days,
+                    "cprice": cprice,
+                    "rprice": rprice,
                 })
                 row = result.mappings().fetchone()
                 saved.append({
@@ -148,6 +192,7 @@ class SavingsTracker:
             SELECT id, instance_id, instance_name, current_type, recommended_type,
                    recommendation, current_monthly_cost_usd, recommended_monthly_cost_usd,
                    estimated_monthly_saving_usd, status,
+                   current_monthly_price_usd, recommended_monthly_price_usd,
                    window_days, created_at, updated_at
             FROM savings_tracker
             WHERE {' AND '.join(where)}
@@ -227,6 +272,12 @@ class SavingsTracker:
                     for key in ("instance", "current", "recommend", "saving", "reason", "action"):
                         if key in h:
                             header_indices[key] = i
+                    # Price detection
+                    if "price" in h or "$" in h:
+                        if "curr" in h:
+                            header_indices["current_price"] = i
+                        elif "rec" in h:
+                            header_indices["recommended_price"] = i
                 continue
 
             if "recommend" not in header_indices:
@@ -260,11 +311,34 @@ class SavingsTracker:
                     except ValueError:
                         pass
 
+                # Try to extract specific prices from columns
+                cprice = None
+                rprice = None
+                
+                if "current_price" in header_indices:
+                    try:
+                        cp_raw = cells[header_indices["current_price"]]
+                        m = re.search(r"([\d,]+(?:\.\d+)?)", cp_raw)
+                        if m: 
+                            cprice = float(m.group(1).replace(",", ""))
+                    except (IndexError, ValueError, TypeError):
+                        pass
+                if "recommended_price" in header_indices:
+                    try:
+                        rp_raw = cells[header_indices["recommended_price"]]
+                        m = re.search(r"([\d,]+(?:\.\d+)?)", rp_raw)
+                        if m: 
+                            rprice = float(m.group(1).replace(",", ""))
+                    except (IndexError, ValueError, TypeError):
+                        pass
+
                 skip_tokens = {"keep", "no change", "n/a", "none", "—", "-", "same"}
                 if recommended_raw.lower() not in skip_tokens:
                     rec_map[matched_iid] = {
                         "recommended_type": recommended_raw,
                         "saving": saving,
+                        "current_price": cprice,
+                        "recommended_price": rprice,
                     }
 
         return rec_map

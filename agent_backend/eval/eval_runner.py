@@ -71,7 +71,6 @@ def score_deciding_factors(
     # Build lookup: metric_name → factor dict
     factor_map = {f.get("metric", "").lower(): f for f in factors}
     primary_factors   = [f for f in factors if f.get("impact", "").lower() == "primary"]
-    secondary_factors = [f for f in factors if f.get("impact", "").lower() == "secondary"]
 
     exp_primary         = exp_df.get("primary_metric", "").lower()
     exp_secondary       = [m.lower() for m in exp_df.get("secondary_metrics", [])]
@@ -327,9 +326,12 @@ def score_scenario(scenario: dict, llm_response: dict) -> dict:
         rw_checks = score_risk_warnings(llm_inst, expected)
 
         # Tag each check with its category
-        for c in rs_checks: c["category"] = "rightsizing"
-        for c in df_checks: c["category"] = "deciding_factors"
-        for c in rw_checks: c["category"] = "risk_warnings"
+        for c in rs_checks: 
+            c["category"] = "rightsizing"
+        for c in df_checks: 
+            c["category"] = "deciding_factors"
+        for c in rw_checks: 
+            c["category"] = "risk_warnings"
 
         checks.extend(rs_checks)
         checks.extend(df_checks)

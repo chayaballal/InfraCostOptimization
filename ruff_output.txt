@@ -1,0 +1,432 @@
+E402 Module level import not at top of file
+   --> agent_backend/agents/analysis/analysis_agent.py:121:1
+    |
+119 | """
+120 |
+121 | import json
+    | ^^^^^^^^^^^
+122 | from typing import Optional
+    |
+
+F811 [*] Redefinition of unused `json` from line 9
+   --> agent_backend/agents/analysis/analysis_agent.py:121:8
+    |
+119 | """
+120 |
+121 | import json
+    |        ^^^^ `json` redefined here
+122 | from typing import Optional
+    |
+   ::: agent_backend/agents/analysis/analysis_agent.py:9:8
+    |
+  8 | import asyncio
+  9 | import json
+    |        ---- previous definition of `json` here
+ 10 | import logging
+ 11 | from typing import AsyncGenerator
+    |
+help: Remove definition: `json`
+
+E402 Module level import not at top of file
+   --> agent_backend/agents/analysis/analysis_agent.py:122:1
+    |
+121 | import json
+122 | from typing import Optional
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+
+E402 Module level import not at top of file
+  --> agent_backend/agents/cost/cost_agent.py:79:1
+   |
+79 | from botocore.config import Config
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+80 |
+81 | def _create_pricing_client():
+   |
+
+E402 Module level import not at top of file
+   --> agent_backend/agents/cost/cost_agent.py:397:1
+    |
+395 |   # MCP PRICING ADAPTER (imported to avoid duplication)
+396 |   # ──────────────────────────────────────────────────────────────────
+397 | / from agent_backend.mcp_aws_pricing import (
+398 | |     normalize_region, 
+399 | |     get_price_with_mcp_fallback, 
+400 | |     compare_instance_costs
+401 | | )
+    | |_^
+    |
+
+F401 [*] `agent_backend.mcp_aws_pricing.normalize_region` imported but unused
+   --> agent_backend/agents/cost/cost_agent.py:398:5
+    |
+396 | # ──────────────────────────────────────────────────────────────────
+397 | from agent_backend.mcp_aws_pricing import (
+398 |     normalize_region, 
+    |     ^^^^^^^^^^^^^^^^
+399 |     get_price_with_mcp_fallback, 
+400 |     compare_instance_costs
+    |
+help: Remove unused import
+
+F401 [*] `agent_backend.mcp_aws_pricing.get_price_with_mcp_fallback` imported but unused
+   --> agent_backend/agents/cost/cost_agent.py:399:5
+    |
+397 | from agent_backend.mcp_aws_pricing import (
+398 |     normalize_region, 
+399 |     get_price_with_mcp_fallback, 
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+400 |     compare_instance_costs
+401 | )
+    |
+help: Remove unused import
+
+F401 [*] `agent_backend.mcp_aws_pricing.compare_instance_costs` imported but unused
+   --> agent_backend/agents/cost/cost_agent.py:400:5
+    |
+398 |     normalize_region, 
+399 |     get_price_with_mcp_fallback, 
+400 |     compare_instance_costs
+    |     ^^^^^^^^^^^^^^^^^^^^^^
+401 | )
+    |
+help: Remove unused import
+
+E402 Module level import not at top of file
+  --> agent_backend/agents/orchestrator/savings.py:10:1
+   |
+ 8 | """
+ 9 |
+10 | import re
+   | ^^^^^^^^^
+11 | import logging
+12 | from typing import Optional
+   |
+
+E402 Module level import not at top of file
+  --> agent_backend/agents/orchestrator/savings.py:11:1
+   |
+10 | import re
+11 | import logging
+   | ^^^^^^^^^^^^^^
+12 | from typing import Optional
+   |
+
+E402 Module level import not at top of file
+  --> agent_backend/agents/orchestrator/savings.py:12:1
+   |
+10 | import re
+11 | import logging
+12 | from typing import Optional
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+13 |
+14 | from sqlalchemy import text
+   |
+
+E402 Module level import not at top of file
+  --> agent_backend/agents/orchestrator/savings.py:14:1
+   |
+12 | from typing import Optional
+13 |
+14 | from sqlalchemy import text
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+15 | from agent_backend.mcp_aws_pricing import get_price_with_mcp_fallback
+   |
+
+E402 Module level import not at top of file
+  --> agent_backend/agents/orchestrator/savings.py:15:1
+   |
+14 | from sqlalchemy import text
+15 | from agent_backend.mcp_aws_pricing import get_price_with_mcp_fallback
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+16 |
+17 | log = logging.getLogger(__name__)
+   |
+
+E701 Multiple statements on one line (colon)
+   --> agent_backend/agents/orchestrator/savings.py:116:25
+    |
+114 |                     # Quick extraction if it's a "t3.medium (Save $...)" string
+115 |                     m = re.search(r"([a-z0-9]+\.[a-z0-9]+)", rtype_norm.lower())
+116 |                     if m: rtype_norm = m.group(1)
+    |                         ^
+117 |                     
+118 |                     try:
+    |
+
+E701 Multiple statements on one line (colon)
+   --> agent_backend/agents/orchestrator/savings.py:321:29
+    |
+319 |                         cp_raw = cells[header_indices["current_price"]]
+320 |                         m = re.search(r"([\d,]+(?:\.\d+)?)", cp_raw)
+321 |                         if m: cprice = float(m.group(1).replace(",", ""))
+    |                             ^
+322 |                     except (IndexError, ValueError, TypeError): pass
+323 |                 if "recommended_price" in header_indices:
+    |
+
+E701 Multiple statements on one line (colon)
+   --> agent_backend/agents/orchestrator/savings.py:322:63
+    |
+320 |                         m = re.search(r"([\d,]+(?:\.\d+)?)", cp_raw)
+321 |                         if m: cprice = float(m.group(1).replace(",", ""))
+322 |                     except (IndexError, ValueError, TypeError): pass
+    |                                                               ^
+323 |                 if "recommended_price" in header_indices:
+324 |                     try:
+    |
+
+E701 Multiple statements on one line (colon)
+   --> agent_backend/agents/orchestrator/savings.py:327:29
+    |
+325 |                         rp_raw = cells[header_indices["recommended_price"]]
+326 |                         m = re.search(r"([\d,]+(?:\.\d+)?)", rp_raw)
+327 |                         if m: rprice = float(m.group(1).replace(",", ""))
+    |                             ^
+328 |                     except (IndexError, ValueError, TypeError): pass
+    |
+
+E701 Multiple statements on one line (colon)
+   --> agent_backend/agents/orchestrator/savings.py:328:63
+    |
+326 |                         m = re.search(r"([\d,]+(?:\.\d+)?)", rp_raw)
+327 |                         if m: rprice = float(m.group(1).replace(",", ""))
+328 |                     except (IndexError, ValueError, TypeError): pass
+    |                                                               ^
+329 |
+330 |                 skip_tokens = {"keep", "no change", "n/a", "none", "—", "-", "same"}
+    |
+
+F401 [*] `csv` imported but unused
+  --> agent_backend/data/cloud_agent.py:21:8
+   |
+19 | import os
+20 | import io
+21 | import csv
+   |        ^^^
+22 | import logging
+23 | from datetime import datetime, timezone
+   |
+help: Remove unused import: `csv`
+
+F401 [*] `typing.Optional` imported but unused
+  --> agent_backend/data/cloud_agent.py:24:20
+   |
+22 | import logging
+23 | from datetime import datetime, timezone
+24 | from typing import Optional
+   |                    ^^^^^^^^
+25 |
+26 | import boto3
+   |
+help: Remove unused import: `typing.Optional`
+
+F401 [*] `boto3` imported but unused
+  --> agent_backend/data/cloud_agent.py:26:8
+   |
+24 | from typing import Optional
+25 |
+26 | import boto3
+   |        ^^^^^
+27 | import pandas as pd
+28 | import s3fs
+   |
+help: Remove unused import: `boto3`
+
+F401 [*] `sqlalchemy.dialects.postgresql.insert` imported but unused
+  --> agent_backend/data/cloud_agent.py:30:44
+   |
+28 | import s3fs
+29 | from sqlalchemy import create_engine, text
+30 | from sqlalchemy.dialects.postgresql import insert
+   |                                            ^^^^^^
+31 | from dotenv import load_dotenv
+   |
+help: Remove unused import: `sqlalchemy.dialects.postgresql.insert`
+
+F841 Local variable `secondary_factors` is assigned to but never used
+  --> agent_backend/eval/eval_runner.py:74:5
+   |
+72 |     factor_map = {f.get("metric", "").lower(): f for f in factors}
+73 |     primary_factors   = [f for f in factors if f.get("impact", "").lower() == "primary"]
+74 |     secondary_factors = [f for f in factors if f.get("impact", "").lower() == "secondary"]
+   |     ^^^^^^^^^^^^^^^^^
+75 |
+76 |     exp_primary         = exp_df.get("primary_metric", "").lower()
+   |
+help: Remove assignment to unused variable `secondary_factors`
+
+E701 Multiple statements on one line (colon)
+   --> agent_backend/eval/eval_runner.py:330:27
+    |
+329 |         # Tag each check with its category
+330 |         for c in rs_checks: c["category"] = "rightsizing"
+    |                           ^
+331 |         for c in df_checks: c["category"] = "deciding_factors"
+332 |         for c in rw_checks: c["category"] = "risk_warnings"
+    |
+
+E701 Multiple statements on one line (colon)
+   --> agent_backend/eval/eval_runner.py:331:27
+    |
+329 |         # Tag each check with its category
+330 |         for c in rs_checks: c["category"] = "rightsizing"
+331 |         for c in df_checks: c["category"] = "deciding_factors"
+    |                           ^
+332 |         for c in rw_checks: c["category"] = "risk_warnings"
+    |
+
+E701 Multiple statements on one line (colon)
+   --> agent_backend/eval/eval_runner.py:332:27
+    |
+330 |         for c in rs_checks: c["category"] = "rightsizing"
+331 |         for c in df_checks: c["category"] = "deciding_factors"
+332 |         for c in rw_checks: c["category"] = "risk_warnings"
+    |                           ^
+333 |
+334 |         checks.extend(rs_checks)
+    |
+
+F841 Local variable `payload` is assigned to but never used
+   --> agent_backend/eval/live_report.py:244:5
+    |
+242 | ) -> dict:
+243 |     """Fetch metrics for one instance via /analyse-eval and return scored result."""
+244 |     payload = {
+    |     ^^^^^^^
+245 |         "scenario_id": instance["instance_id"],
+246 |         "metrics":     [],          # will be filled by the endpoint from DB — see note below
+    |
+help: Remove assignment to unused variable `payload`
+
+F841 Local variable `metrics` is assigned to but never used
+   --> agent_backend/eval/live_report.py:307:5
+    |
+305 | def print_instance_report(result: dict, idx: int, total: int):
+306 |     inst    = result["instance"]
+307 |     metrics = result["metrics"]
+    |     ^^^^^^^
+308 |     llm     = result["llm"]
+309 |     iid     = inst["instance_id"]
+    |
+help: Remove assignment to unused variable `metrics`
+
+F541 [*] f-string without any placeholders
+   --> agent_backend/eval/live_report.py:429:34
+    |
+427 |                 sev = flag.get("severity", "")
+428 |                 sev_color = {"CRITICAL":"red","HIGH":"yellow","MEDIUM":"cyan","LOW":"dim"}.get(sev,"white")
+429 |                 flag_line = Text(f"  ")
+    |                                  ^^^^^
+430 |                 flag_line.append(sev, style=f"bold {sev_color}")
+431 |                 flag_line.append(f"  {flag.get('flag','')}  ", style="bold")
+    |
+help: Remove extraneous `f` prefix
+
+F841 Local variable `metrics` is assigned to but never used
+   --> agent_backend/eval/live_report.py:443:9
+    |
+441 |     for r in results:
+442 |         inst    = r["instance"]
+443 |         metrics = r["metrics"]
+    |         ^^^^^^^
+444 |         llm     = r.get("llm") or {}
+445 |         iid     = inst["instance_id"]
+    |
+help: Remove assignment to unused variable `metrics`
+
+F541 [*] f-string without any placeholders
+   --> agent_backend/eval/live_report.py:680:27
+    |
+678 |         except Exception as e:
+679 |             console.print(f"[red]Cannot reach backend: {e}[/red]")
+680 |             console.print(f"[yellow]Make sure uvicorn is running: uv run uvicorn main:app --reload --port 8000[/yellow]")
+    |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+681 |             return
+    |
+help: Remove extraneous `f` prefix
+
+F541 [*] f-string without any placeholders
+   --> agent_backend/eval/live_report.py:698:31
+    |
+696 |                 result = await fetch_and_analyse(client, inst, args.window)
+697 |             except httpx.ConnectError:
+698 |                 console.print(f"[red]Connection refused — is the backend running?[/red]")
+    |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+699 |                 break
+700 |             except Exception as e:
+    |
+help: Remove extraneous `f` prefix
+
+F401 [*] `typing.AsyncGenerator` imported but unused
+  --> agent_backend/main.py:26:20
+   |
+24 | import logging
+25 | import re
+26 | from typing import AsyncGenerator, Optional
+   |                    ^^^^^^^^^^^^^^
+27 |
+28 | from fastapi import FastAPI, HTTPException
+   |
+help: Remove unused import: `typing.AsyncGenerator`
+
+F401 [*] `agent_backend.agents.cost.cost_agent.format_uptime_pricing_for_prompt` imported but unused
+  --> agent_backend/main.py:41:31
+   |
+39 | from agent_backend.agents.cost.cost_agent import (
+40 |     init_pricing, get_pricing_table_async, format_pricing_for_prompt, 
+41 |     get_uptime_pricing_table, format_uptime_pricing_for_prompt, 
+   |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+42 |     compare_instance_costs, normalize_region
+43 | )
+   |
+help: Remove unused import: `agent_backend.agents.cost.cost_agent.format_uptime_pricing_for_prompt`
+
+F841 Local variable `table` is assigned to but never used
+   --> agent_backend/main.py:258:9
+    |
+256 |         instance_types = list({r["instance_type"] for r in rows if r.get("instance_type")})
+257 |         # Use the new async pricing lookup that checks DB
+258 |         table = await get_pricing_table_async(instance_types, os.getenv("AWS_REGION", "us-east-1"))
+    |         ^^^^^
+259 |         pricing_md = format_pricing_for_prompt(instance_types, os.getenv("AWS_REGION", "us-east-1"))
+260 |     except (asyncio.TimeoutError, Exception) as e:
+    |
+help: Remove assignment to unused variable `table`
+
+F821 Undefined name `fleet_types`
+   --> agent_backend/main.py:266:87
+    |
+264 |     try:
+265 |         catalog_md = await asyncio.wait_for(
+266 |             asyncio.get_event_loop().run_in_executor(None, format_catalog_for_prompt, fleet_types),
+    |                                                                                       ^^^^^^^^^^^
+267 |             timeout=3.0
+268 |         )
+    |
+
+F821 Undefined name `get_pricing_table`
+   --> agent_backend/main.py:370:17
+    |
+368 |     types = [t.strip() for t in instance_types.split(",") if t.strip()] if instance_types else []
+369 |     try:
+370 |         table = get_pricing_table(types)
+    |                 ^^^^^^^^^^^^^^^^^
+371 |         return {"region": "us-east-1", "pricing": table}
+372 |     except Exception as e:
+    |
+
+F401 [*] `datetime.datetime` imported but unused
+ --> scripts/generate_mock_data.py:3:22
+  |
+1 | import os
+2 | import random
+3 | from datetime import datetime, timedelta, date
+  |                      ^^^^^^^^
+4 | from uuid import uuid4
+5 | import pandas as pd
+  |
+help: Remove unused import: `datetime.datetime`
+
+Found 38 errors.
+[*] 14 fixable with the `--fix` option (5 hidden fixes can be enabled with the `--unsafe-fixes` option).

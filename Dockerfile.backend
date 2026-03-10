@@ -1,0 +1,28 @@
+# ── Backend Dockerfile ───────────────────────────────────────────────
+FROM python:3.13-slim
+
+# Install system deps (needed for psycopg2-binary, pyarrow, etc.)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install uv for fast dependency resolution
+RUN pip install --no-cache-dir uv
+
+# Copy dependency manifests first for layer caching
+COPY pyproject.toml uv.lock ./
+
+# Install all dependencies into the system Python (no venv inside container)
+RUN uv pip install --system --no-cache -r pyproject.toml
+
+# Copy full application source
+COPY . .
+
+# Expose FastAPI port
+EXPOSE 8000
+
+# Run uvicorn (no --reload in production)
+CMD ["uvicorn", "agent_backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

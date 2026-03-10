@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS ec2_metrics_latest (
     stat_maximum  DOUBLE PRECISION,
     stat_minimum  DOUBLE PRECISION,
     stat_sum      DOUBLE PRECISION,
+    daily_active_hours DOUBLE PRECISION,
     loaded_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     CONSTRAINT pk_ec2_metrics_latest PRIMARY KEY (instance_id, metric_name, day_bucket)
 );
@@ -61,6 +62,7 @@ base AS (
         MAX(m.az)            AS az,
         MAX(m.platform)      AS platform,
         COUNT(DISTINCT m.day_bucket) AS sample_days,
+        SUM(m.daily_active_hours) / NULLIF(COUNT(DISTINCT m.metric_name), 0) AS uptime_hours,
 
         AVG(m.stat_average) FILTER (WHERE m.metric_name = 'CPUUtilization') AS cpu_avg_pct,
         MAX(m.stat_maximum) FILTER (WHERE m.metric_name = 'CPUUtilization') AS cpu_peak_pct,
@@ -72,22 +74,7 @@ base AS (
         AVG(m.stat_average) FILTER (WHERE m.metric_name = 'mem_used_percent') AS mem_avg_pct,
         MAX(m.stat_maximum) FILTER (WHERE m.metric_name = 'mem_used_percent') AS mem_peak_pct,
         percentile_cont(0.95) WITHIN GROUP (ORDER BY m.stat_average)
-            FILTER (WHERE m.metric_name = 'mem_used_percent') AS mem_p95_pct,
-
-        COALESCE(SUM(m.stat_sum) FILTER (WHERE m.metric_name = 'NetworkIn'), 0)  AS net_in_bytes_total,
-        COALESCE(SUM(m.stat_sum) FILTER (WHERE m.metric_name = 'NetworkOut'), 0) AS net_out_bytes_total,
-        AVG(m.stat_average) FILTER (WHERE m.metric_name = 'NetworkIn')            AS net_in_avg_bytes,
-        AVG(m.stat_average) FILTER (WHERE m.metric_name = 'NetworkOut')           AS net_out_avg_bytes,
-
-        COALESCE(SUM(m.stat_sum) FILTER (WHERE m.metric_name = 'DiskReadBytes'), 0)  AS disk_read_bytes_total,
-        COALESCE(SUM(m.stat_sum) FILTER (WHERE m.metric_name = 'DiskWriteBytes'), 0) AS disk_write_bytes_total,
-        COALESCE(SUM(m.stat_sum) FILTER (WHERE m.metric_name = 'VolumeReadBytes'), 0)  AS ebs_read_bytes_total,
-        COALESCE(SUM(m.stat_sum) FILTER (WHERE m.metric_name = 'VolumeWriteBytes'), 0) AS ebs_write_bytes_total,
-
-        AVG(m.stat_average) FILTER (WHERE m.metric_name IN ('EBSIOBalance%', 'EBSByteBalance%'))
-            AS ebs_io_balance_avg_pct,
-        COALESCE(SUM(m.stat_sum) FILTER (WHERE m.metric_name = 'StatusCheckFailed'), 0)
-            AS status_check_failures
+            FILTER (WHERE m.metric_name = 'mem_used_percent') AS mem_p95_pct
     FROM windows w
     JOIN ec2_metrics_latest m
       ON m.day_bucket >= CURRENT_DATE - (w.window_days || ' days')::INTERVAL
@@ -103,21 +90,22 @@ SELECT
     platform,
     window_days,
     sample_days,
+    uptime_hours,
     cpu_avg_pct,
     cpu_peak_pct,
     cpu_p95_pct,
     cpu_p99_pct,
     mem_avg_pct,
     mem_peak_pct,
-    mem_p95_pct,
-    net_in_bytes_total,
-    net_out_bytes_total,
-    net_in_avg_bytes,
-    net_out_avg_bytes,
-    disk_read_bytes_total,
-    disk_write_bytes_total,
-    ebs_read_bytes_total,
-    ebs_write_bytes_total,
-    ebs_io_balance_avg_pct,
-    status_check_failures
+    mem_p95_pct
 FROM base;
+
+-- Persistent pricing cache
+CREATE TABLE IF NOT EXISTS ec2_instance_prices (
+    instance_type VARCHAR(64)  NOT NULL,
+    region        VARCHAR(64)  NOT NULL,
+    hourly_usd    DOUBLE PRECISION NOT NULL,
+    updated_at    TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    CONSTRAINT pk_ec2_instance_prices PRIMARY KEY (instance_type, region)
+);
+

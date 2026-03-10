@@ -241,12 +241,6 @@ async def fetch_and_analyse(
     window_days: int,
 ) -> dict:
     """Fetch metrics for one instance via /analyse-eval and return scored result."""
-    payload = {
-        "scenario_id": instance["instance_id"],
-        "metrics":     [],          # will be filled by the endpoint from DB — see note below
-        "window_days": window_days,
-    }
-
     # /analyse-eval accepts pre-built metrics OR we can use the dedicated
     # /analyse-eval-live endpoint. Since we don't have that, we call
     # /instances-metrics (a new lightweight endpoint we add below).
@@ -304,7 +298,6 @@ async def fetch_and_analyse(
 # ── Terminal report ───────────────────────────────────────────────
 def print_instance_report(result: dict, idx: int, total: int):
     inst    = result["instance"]
-    metrics = result["metrics"]
     llm     = result["llm"]
     iid     = inst["instance_id"]
     name    = inst.get("instance_name") or "unnamed"
@@ -426,7 +419,7 @@ def print_instance_report(result: dict, idx: int, total: int):
             for flag in flags:
                 sev = flag.get("severity", "")
                 sev_color = {"CRITICAL":"red","HIGH":"yellow","MEDIUM":"cyan","LOW":"dim"}.get(sev,"white")
-                flag_line = Text(f"  ")
+                flag_line = Text("  ")
                 flag_line.append(sev, style=f"bold {sev_color}")
                 flag_line.append(f"  {flag.get('flag','')}  ", style="bold")
                 flag_line.append(flag.get("detail",""), style="dim")
@@ -440,7 +433,6 @@ def generate_html_report(results: list[dict], window_days: int) -> str:
 
     for r in results:
         inst    = r["instance"]
-        metrics = r["metrics"]
         llm     = r.get("llm") or {}
         iid     = inst["instance_id"]
         name    = inst.get("instance_name") or "unnamed"
@@ -677,7 +669,7 @@ async def main():
             instances = await fetch_instances(client)
         except Exception as e:
             console.print(f"[red]Cannot reach backend: {e}[/red]")
-            console.print(f"[yellow]Make sure uvicorn is running: uv run uvicorn main:app --reload --port 8000[/yellow]")
+            console.print("[yellow]Make sure uvicorn is running: uv run uvicorn main:app --reload --port 8000[/yellow]")
             return
 
         if args.instance:
@@ -695,7 +687,7 @@ async def main():
             try:
                 result = await fetch_and_analyse(client, inst, args.window)
             except httpx.ConnectError:
-                console.print(f"[red]Connection refused — is the backend running?[/red]")
+                console.print("[red]Connection refused — is the backend running?[/red]")
                 break
             except Exception as e:
                 result = {

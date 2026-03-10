@@ -4,96 +4,10 @@ import remarkGfm from "remark-gfm";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Cell, Legend } from "recharts";
 import html2pdf from "html2pdf.js";
 
-const API = "http://127.0.0.1:8000";
+const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-function parseRightsizingRecommendations(markdown, instances) {
-  if (!markdown) return [];
 
-  const knownIds = new Set(instances.map(i => i.instance_id));
-  const byId = new Map(instances.map(i => [i.instance_id, i]));
-  const byName = new Map(
-    instances
-      .filter(i => i.instance_name)
-      .map(i => [String(i.instance_name).trim().toLowerCase(), i]),
-  );
 
-  const rows = markdown.split("\n");
-  const result = new Map();
-  let header = null;
-  let idx = {};
-
-  for (const line of rows) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("|")) {
-      header = null;
-      idx = {};
-      continue;
-    }
-
-    const cells = trimmed.split("|").map(c => c.trim()).filter(Boolean);
-    if (!cells.length) continue;
-
-    if (cells.every(c => /^:?-{3,}:?$/.test(c))) continue;
-
-    const lowered = cells.map(c => c.toLowerCase());
-    if (lowered.some(c => c.includes("recommend"))) {
-      header = lowered;
-      idx = {
-        instance: header.findIndex(h => h.includes("instance")),
-        current: header.findIndex(h => h.includes("current")),
-        recommend: header.findIndex(h => h.includes("recommend")),
-        reason: header.findIndex(h => h.includes("reason")),
-      };
-      continue;
-    }
-
-    if (!header || idx.recommend == null || idx.recommend < 0 || idx.recommend >= cells.length) {
-      continue;
-    }
-
-    const recommended = cells[idx.recommend].replace(/[`*]/g, "").trim();
-    if (!recommended) continue;
-    if (["keep", "no change", "same", "n/a", "none", "-", "—"].includes(recommended.toLowerCase())) {
-      continue;
-    }
-
-    let instanceId = null;
-    const rowText = cells.join(" ");
-    const idMatch = rowText.match(/\bi-[a-z0-9]+\b/i);
-    if (idMatch && knownIds.has(idMatch[0])) {
-      instanceId = idMatch[0];
-    } else if (idx.instance != null && idx.instance >= 0 && idx.instance < cells.length) {
-      const maybeName = cells[idx.instance].toLowerCase();
-      const inst = byName.get(maybeName);
-      if (inst) instanceId = inst.instance_id;
-    }
-    if (!instanceId) continue;
-
-    const inst = byId.get(instanceId);
-    const currentFromTable =
-      idx.current != null && idx.current >= 0 && idx.current < cells.length
-        ? cells[idx.current].replace(/[`*]/g, "").trim()
-        : "";
-
-    result.set(instanceId, {
-      instance_id: instanceId,
-      instance_name: inst?.instance_name || instanceId,
-      current_type: currentFromTable || inst?.instance_type || "",
-      recommended_type: recommended,
-      reason:
-        idx.reason != null && idx.reason >= 0 && idx.reason < cells.length
-          ? cells[idx.reason]
-          : "",
-    });
-  }
-
-  return Array.from(result.values());
-}
-
-function formatUsd(value) {
-  if (value == null || Number.isNaN(Number(value))) return "—";
-  return `$${Number(value).toFixed(2)}`;
-}
 
 const MD_COMPONENTS = {
   h1: ({ children }) => <h1 className="md-h1">{children}</h1>,
@@ -325,7 +239,7 @@ function FleetDashboard({ windowDays }) {
               <YAxis dataKey="name" type="category" width={140} tick={{ fontSize: 11 }} stroke="#a8a29e" />
               <RechartsTooltip
                 contentStyle={tooltipStyle}
-                formatter={(val, name, props) => [
+                formatter={(val, name) => [
                   `${val.toFixed(1)}%`,
                   name === "cpu_avg" ? "CPU Avg" : "CPU Max"
                 ]}
@@ -482,6 +396,48 @@ function SavingsBoard() {
   const [total, setTotal]     = useState(0);
   const [loading, setLoading] = useState(true);
   const [rowCosts, setRowCosts] = useState({});
+  const [sortConfig, setSortConfig] = useState({ key: 'estimated_monthly_saving_usd', direction: 'desc' });
+
+  const sortedEntries = useMemo(() => {
+    let sortableItems = [...entries];
+    if (sortConfig.key !== null) {
+      sortableItems.sort((a, b) => {
+        let aVal = a[sortConfig.key];
+        let bVal = b[sortConfig.key];
+        
+        let aIsNoChange = a.current_type === a.recommended_type || (a.recommended_type || "").toLowerCase() === "no change";
+        let bIsNoChange = b.current_type === b.recommended_type || (b.recommended_type || "").toLowerCase() === "no change";
+
+        if (sortConfig.key === 'estimated_monthly_saving_usd' || sortConfig.key === 'current_monthly_price_usd' || sortConfig.key === 'recommended_monthly_price_usd') {
+          if (sortConfig.key === 'estimated_monthly_saving_usd') {
+             aVal = aIsNoChange ? 0 : (aVal != null ? parseFloat(aVal) : -Infinity);
+             bVal = bIsNoChange ? 0 : (bVal != null ? parseFloat(bVal) : -Infinity);
+          } else {
+             aVal = aVal != null ? parseFloat(aVal) : -Infinity;
+             bVal = bVal != null ? parseFloat(bVal) : -Infinity;
+          }
+        } else if (sortConfig.key === 'created_at') {
+          aVal = new Date(aVal).getTime() || 0;
+          bVal = new Date(bVal).getTime() || 0;
+        } else {
+          aVal = (aVal || '').toString().toLowerCase();
+          bVal = (bVal || '').toString().toLowerCase();
+        }
+        
+        if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+    return sortableItems;
+  }, [entries, sortConfig]);
+
+  const requestSort = (key) => {
+    let direction = 'asc';
+    if (sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
+    setSortConfig({ key, direction });
+  };
+
 
   const fetchSavings = () => {
     setLoading(true);
@@ -576,42 +532,75 @@ function SavingsBoard() {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: "2px solid var(--border)" }}>
-                {["Instance","Current","Recommended","Current $/mo","Recommended $/mo","Est. Monthly Saving","Status","Date",""].map(h => (
-                  <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>{h}</th>
-                ))}
+                {[
+                  { label: "Instance", key: "instance_id" },
+                  { label: "Current Type", key: "current_type" },
+                  { label: "Current $/mo", key: "current_monthly_price_usd" },
+                  { label: "Recommended Type", key: "recommended_type" },
+                  { label: "Recommended $/mo", key: "recommended_monthly_price_usd" },
+                  { label: "Est. Monthly Saving", key: "estimated_monthly_saving_usd" },
+                  { label: "Status", key: "status" },
+                  { label: "Date", key: "created_at" },
+                  { label: "", key: null }
+                ].map(col => (
+                  <th 
+                    key={col.label} 
+                    onClick={() => col.key && requestSort(col.key)}
+                    style={{ padding: "8px 12px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap", cursor: col.key ? "pointer" : "default" }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                      {col.label} 
+                      {col.key && (
+                        <span style={{ opacity: sortConfig.key === col.key ? 1 : 0.3 }}>
+                          {sortConfig.key === col.key ? (sortConfig.direction === 'asc' ? '↑' : '↓') : '↕'}
+                        </span>
+                      )}
+                    </div>
+                  </th>
+                ))
+              }
               </tr>
             </thead>
             <tbody>
-              {entries.map(e => {
+              {sortedEntries.map(e => {
                 const sc = STATUS_COLORS[e.status] || STATUS_COLORS.Proposed;
                 const compare = rowCosts[e.id];
-                const estSaving = Number(compare?.monthly_difference_usd ?? e.estimated_monthly_saving_usd);
+                const estSavingVal = compare?.monthly_difference_usd ?? e.estimated_monthly_saving_usd;
+                const estSaving = estSavingVal != null ? Number(estSavingVal) : null;
+                const isNoChange = e.current_type === e.recommended_type || (e.recommended_type || "").toLowerCase() === "no change";
                 return (
-                  <tr key={e.id} style={{ borderBottom: "1px solid var(--border)" }}>
+                  <tr key={e.id} style={{ borderBottom: "1px solid var(--border)", opacity: isNoChange ? 0.6 : 1 }}>
                     <td style={{ padding: "10px 12px" }}>
                       <div style={{ fontWeight: 500, fontSize: 12 }}>{e.instance_name || e.instance_id}</div>
                       <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--mono)" }}>{e.instance_id}</div>
                     </td>
-                    <td style={{ padding: "10px 12px", fontSize: 12, fontFamily: "var(--mono)", color: "var(--text2)" }}>{compare?.current_type || e.current_type || "—"}</td>
-                    <td style={{ padding: "10px 12px", fontSize: 12, fontFamily: "var(--mono)", color: "var(--accent)", fontWeight: 600 }}>{compare?.recommended_type || e.recommended_type || "—"}</td>
-                    <td style={{ padding: "10px 12px", fontSize: 12, color: "var(--text2)", fontWeight: 600 }}>
-                      {formatUsd(compare?.current?.monthly_usd ?? e.current_monthly_cost_usd)}
+                    <td style={{ padding: "10px 12px", fontSize: 12, fontFamily: "var(--mono)", color: "var(--text2)" }}>{e.current_type || "—"}</td>
+                    <td style={{ padding: "10px 12px", fontSize: 13, fontWeight: 600 }}>
+                      {e.current_monthly_price_usd != null 
+                        ? `$${parseFloat(e.current_monthly_price_usd).toFixed(2)}/mo` 
+                        : (compare?.current?.monthly_usd ? `$${compare.current.monthly_usd.toFixed(2)}/mo` : "—")}
                     </td>
-                    <td style={{ padding: "10px 12px", fontSize: 12, color: "var(--text2)", fontWeight: 600 }}>
-                      {formatUsd(compare?.recommended?.monthly_usd ?? e.recommended_monthly_cost_usd)}
+                    <td style={{ padding: "10px 12px", fontSize: 12, fontFamily: "var(--mono)", color: isNoChange ? "var(--muted)" : "var(--accent)", fontWeight: 600 }}>
+                      {isNoChange ? "No Change" : (e.recommended_type || "—")}
                     </td>
-                    <td style={{
-                      padding: "10px 12px",
-                      fontSize: 13,
-                      fontWeight: 600,
-                      color: Number.isFinite(estSaving) ? (estSaving >= 0 ? "var(--green)" : "var(--red)") : "var(--text2)",
-                    }}>
-                      {Number.isFinite(estSaving) ? `${formatUsd(estSaving)}/mo` : "-"}
+                    <td style={{ padding: "10px 12px", fontSize: 13, fontWeight: 600, color: isNoChange ? "var(--muted)" : "inherit" }}>
+                      {isNoChange ? "—" : (e.recommended_monthly_price_usd != null 
+                        ? `$${parseFloat(e.recommended_monthly_price_usd).toFixed(2)}/mo` 
+                        : (compare?.recommended?.monthly_usd ? `$${compare.recommended.monthly_usd.toFixed(2)}/mo` : "—"))}
+                    </td>
+                    <td style={{ padding: "10px 12px", fontSize: 13, fontWeight: 600, color: isNoChange ? "var(--muted)" : (estSaving < 0 ? "var(--red)" : "var(--green)") }}>
+                      {isNoChange ? "—" : (estSaving != null ? ((estSaving < 0 ? "-" : "") + `$${Math.abs(estSaving).toFixed(2)}/mo`) : "—")}
                     </td>
                     <td style={{ padding: "10px 12px" }}>
-                      <span style={{ fontWeight: 600, fontSize: 11, padding: "3px 10px", borderRadius: 12, color: sc.color, background: sc.bg }}>
-                        {e.status}
-                      </span>
+                      {isNoChange ? (
+                        <span style={{ fontWeight: 600, fontSize: 11, padding: "3px 10px", borderRadius: 12, color: "var(--muted)", background: "var(--surface)" }}>
+                          Optimal
+                        </span>
+                      ) : (
+                        <span style={{ fontWeight: 600, fontSize: 11, padding: "3px 10px", borderRadius: 12, color: sc.color, background: sc.bg }}>
+                          {e.status}
+                        </span>
+                      )}
                     </td>
                     <td style={{ padding: "10px 12px", fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>
                       {new Date(e.created_at).toLocaleDateString()}
@@ -652,6 +641,8 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen]   = useState(true);
   const [activeView, setActiveView]     = useState("analysis"); // "analysis" | "compare" | "savings"
   const [costComparisons, setCostComparisons] = useState([]);
+  const [isSaving, setIsSaving] = useState(false);
+  const [recommendations, setRecommendations] = useState([]);
   const outputRef = useRef(null);
   const abortRef  = useRef(null);
 
@@ -669,10 +660,10 @@ export default function App() {
     }
   }, [output]);
 
-  const recommendations = useMemo(
-    () => parseRightsizingRecommendations(output, instances),
-    [output, instances],
-  );
+  useEffect(() => {
+    if (status === "loading") setRecommendations([]);
+  }, [status]);
+
   const scopedRecommendations = useMemo(() => {
     if (!analysedInstanceIds.length) return [];
     const allowed = new Set(analysedInstanceIds);
@@ -688,8 +679,34 @@ export default function App() {
         return;
       }
 
+      
       try {
-        const limited = scopedRecommendations.slice(0, 25);
+        let parsedRecs = recommendations;
+        // Parse recommendations via API if we haven't yet for this output
+        if (!parsedRecs.length && output) {
+          const parseRes = await fetch(`${API}/parse-recommendations`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ markdown_text: output, instances })
+          });
+          if (parseRes.ok) {
+            const parseData = await parseRes.json();
+            parsedRecs = parseData.recommendations || [];
+            if (!cancelled) setRecommendations(parsedRecs);
+          }
+        }
+
+        const allowed = new Set(analysedInstanceIds);
+        const latestScopedRecs = parsedRecs.filter(r => allowed.has(r.instance_id));
+
+        if (!latestScopedRecs.length) {
+          if (!cancelled) {
+            setCostComparisons([]);
+          }
+          return;
+        }
+
+        const limited = latestScopedRecs.slice(0, 25);
         const results = await Promise.all(
           limited.map(async rec => {
             try {
@@ -713,7 +730,7 @@ export default function App() {
           }),
         );
         if (!cancelled) setCostComparisons(results);
-      } catch (e) {
+      } catch {
         if (!cancelled) setCostComparisons([]);
       }
     }
@@ -722,7 +739,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [output, streaming, status, scopedRecommendations]);
+  }, [output, streaming, status, analysedInstanceIds, instances, recommendations, scopedRecommendations.length]);
 
   const toggleSelect = (id) =>
     setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -812,7 +829,7 @@ export default function App() {
           try {
             const { token } = JSON.parse(data);
             setOutput(prev => prev + token);
-          } catch {}
+          } catch { /* ignore */ }
         }
       }
       setStatus("done");
@@ -1287,6 +1304,7 @@ export default function App() {
           border-radius: 1px;
         }
         @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
 
         /* ── Markdown elements ── */
         .md-h1 {
@@ -1491,22 +1509,41 @@ export default function App() {
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                       <rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
                     </svg>
-                    All (Auto-Select)
+                    Auto-Select
                   </button>
+                  {selected.length > 0 && (
+                    <button
+                      className="inst-action-btn"
+                      onClick={() => setSelected([])}
+                      style={{ padding: "6px 12px", fontSize: "11px", borderRadius: "6px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "4px" }}>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                      </svg>
+                      Clear
+                    </button>
+                  )}
                 </div>
 
                 <div className="inst-scroll">
-                  {loadingInst
-                    ? [1, 2, 3, 4].map(i => <div key={i} className="skeleton" />)
-                    : instances.map(inst => (
+                  {loadingInst ? (
+                    [1, 2, 3, 4].map(i => <div key={i} className="skeleton" />)
+                  ) : instances.length === 0 ? (
+                    <div style={{ padding: "40px 20px", textAlign: "center", color: "var(--muted)", fontSize: "12px", lineHeight: 1.5 }}>
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ margin: "0 auto 12px", opacity: 0.3, display: "block" }}>
+                        <rect x="2" y="3" width="20" height="14" rx="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
+                      </svg>
+                      No instances found.<br/>Has the ETL pipeline run?
+                    </div>
+                  ) : (
+                    instances.map(inst => (
                         <InstanceCard
                           key={inst.instance_id}
                           inst={inst}
                           selected={selected.includes(inst.instance_id)}
                           onClick={() => toggleSelect(inst.instance_id)}
                         />
-                      ))
-                  }
+                    ))
+                  )}
                 </div>
               </div>
 
@@ -1601,6 +1638,8 @@ export default function App() {
                         {!streaming && status === "done" && focus.includes("full_report") && (
                           <>
                             <button className="save-rec-btn" onClick={async () => {
+                              if (isSaving) return;
+                              setIsSaving(true);
                               try {
                                 const parsed = scopedRecommendations.length ? scopedRecommendations : recommendations;
                                 const byId = new Map(costComparisons.map((r) => [r.instance_id, r]));
@@ -1645,6 +1684,8 @@ export default function App() {
                                         recommended_monthly_cost_usd: row.compare?.recommended?.monthly_usd ?? null,
                                         estimated_monthly_saving_usd: row.compare?.monthly_difference_usd ?? null,
                                         window_days: win,
+                                        current_monthly_price_usd: row.compare?.current?.monthly_usd ?? null,
+                                        recommended_monthly_price_usd: row.compare?.recommended?.monthly_usd ?? null,
                                       }),
                                     }),
                                   );
@@ -1664,10 +1705,13 @@ export default function App() {
                                 const toSave = selected.length > 0 ? selected : instances.map(i => i.instance_id);
                                 const instMeta = toSave.slice(0, 30).map(iid => {
                                   const inst = instances.find(i => i.instance_id === iid);
+                                  const comp = costComparisons.find(c => c.instance_id === iid);
                                   return {
                                     instance_id:   iid,
                                     instance_name: inst?.instance_name || null,
                                     instance_type: inst?.instance_type || null,
+                                    current_monthly_price_usd: comp?.compare?.current?.monthly_usd || null,
+                                    recommended_monthly_price_usd: comp?.compare?.recommended?.monthly_usd || null,
                                   };
                                 });
                                 const saveRes = await fetch(`${API}/savings/bulk`, {
@@ -1686,12 +1730,21 @@ export default function App() {
                                 setActiveView("savings");
                               } catch (e) {
                                 setError(e.message || "Failed to save recommendations");
+                              } finally {
+                                setIsSaving(false);
                               }
-                            }}>
-                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
-                              </svg>
-                              Save to Tracker
+                            }}
+                            disabled={isSaving}
+                            style={{ opacity: isSaving ? 0.7 : 1, cursor: isSaving ? "not-allowed" : "pointer" }}
+                            >
+                              {isSaving ? (
+                                <span style={{ width: 13, height: 13, border: "2px solid rgba(255,255,255,0.3)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
+                              ) : (
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
+                                </svg>
+                              )}
+                              {isSaving ? "Saving..." : "Save to Tracker"}
                             </button>
                             <button className="report-btn" onClick={() => generatePDF(outputRef, win)}>
                               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

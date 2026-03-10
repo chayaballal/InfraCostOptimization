@@ -1,12 +1,122 @@
 """
+llm_service.py — Groq LLM client wrapper.
+
+Encapsulates all interactions with the Groq API:
+streaming responses, JSON (eval) calls, and text-to-SQL translation.
+"""
+
+import asyncio
+import json
+import logging
+from typing import AsyncGenerator, Optional
+
+from groq import AsyncGroq
+
+log = logging.getLogger(__name__)
+
+
+class LLMService:
+    """Wraps the async Groq client for streaming, JSON, and SQL translation calls."""
+
+    def __init__(self, api_key: str, model: str = "llama-3.3-70b-versatile") -> None:
+        self.client = AsyncGroq(api_key=api_key)
+        self.model = model
+
+    # ── Streaming (SSE) ───────────────────────────────────────────
+
+    async def stream_response(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_retries: int = 3,
+    ) -> AsyncGenerator[str, None]:
+        """Stream tokens from Groq as Server-Sent Events with retry."""
+        for attempt in range(max_retries):
+            try:
+                stream = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user",   "content": user_prompt},
+                    ],
+                    temperature=0.001,
+                    max_tokens=4096,
+                    stream=True,
+                )
+
+                async for chunk in stream:
+                    delta = chunk.choices[0].delta.content
+                    if delta:
+                        yield f"data: {json.dumps({'token': delta})}\n\n"
+
+                yield "data: [DONE]\n\n"
+                return
+
+            except Exception as e:
+                log.warning(f"Groq API Error on attempt {attempt + 1}/{max_retries}: {e}")
+                if attempt == max_retries - 1:
+                    error_msg = "\\n\\n**Error:** LLM generation failed after retries."
+                    yield f"data: {json.dumps({'token': error_msg})}\n\n"
+                    yield "data: [DONE]\n\n"
+                else:
+                    await asyncio.sleep(2 ** attempt)
+
+    # ── JSON (non-streaming, for evals) ───────────────────────────
+
+    async def call_json(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> dict:
+        """Non-streaming Groq call that returns parsed JSON."""
+        response = await self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_prompt},
+            ],
+            temperature=0.1,
+            max_tokens=4096,
+            stream=False,
+        )
+        raw = response.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1]
+            raw = raw.rsplit("```", 1)[0]
+        return json.loads(raw)
+
+    # ── Text-to-SQL translation ───────────────────────────────────
+
+    async def translate_prompt_to_sql(
+        self,
+        prompt: str,
+        system_prompt: str,
+    ) -> str:
+        """Convert a natural language prompt to a PostgreSQL WHERE clause."""
+        response = await self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": prompt},
+            ],
+            temperature=0.0,
+            max_tokens=200,
+            stream=False,
+        )
+        raw = response.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1]
+            raw = raw.rsplit("```", 1)[0]
+        if raw.lower().startswith("where "):
+            raw = raw[6:]
+        return raw.strip()
+
+
+"""
 prompt_builder.py — LLM prompt construction for the EC2 Analysis Agent.
 
 Builds system/user prompts and formats metric data for LLM consumption.
 """
-
-import json
-from typing import Optional
-
 
 class PromptBuilder:
     """Stateless helper that constructs all LLM prompts."""
@@ -30,16 +140,7 @@ The view `v_ec2_llm_summary` has the following columns:
 - mem_avg_pct (numeric)
 - mem_peak_pct (numeric)
 - mem_p95_pct (numeric)
-- net_in_gb (numeric)
-- net_out_gb (numeric)
-- net_in_avg_mbps (numeric)
-- net_out_avg_mbps (numeric)
-- disk_read_gb (numeric)
-- disk_write_gb (numeric)
-- ebs_read_gb (numeric)
-- ebs_write_gb (numeric)
-- ebs_io_balance_pct (numeric)
-- status_check_failures (int)
+- mem_p95_pct (numeric)
 
 ONLY output the PostgreSQL WHERE clause condition. Do not output the SELECT statement, the word WHERE, markdown formatting, or any explanation.
 
@@ -66,10 +167,9 @@ Example Output: instance_type = 'm5.large'
             f"## EC2 Fleet Utilization Report — Last {window_days} Days\n",
             f"Total instances analysed: **{len(rows)}**\n",
             "### Per-Instance Metrics\n",
-            "| Instance ID | Name | Type | AZ | Platform | CPU Avg% | CPU P95% | CPU Peak% "
-            "| Mem Avg% | Mem P95% | Net In GB | Net Out GB "
-            "| Disk Read GB | Disk Write GB | EBS IO Bal% | Status Fails |",
-            "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+            "| Instance ID | Name | Type | AZ | CPU Avg% | CPU P95% | Mem P95% "
+            "| Uptime (h) | Samples |",
+            "|---|---|---|---|---|---|---|---|---|",
         ]
 
         for r in rows:
@@ -79,20 +179,12 @@ Example Output: instance_type = 'm5.large'
 
             lines.append(
                 f"| {v('instance_id')} | {v('instance_name')} | {v('instance_type')} "
-                f"| {v('az')} | {v('platform')} "
-                f"| {v('cpu_avg_pct')} | {v('cpu_p95_pct')} | {v('cpu_peak_pct')} "
-                f"| {v('mem_avg_pct')} | {v('mem_p95_pct')} "
-                f"| {v('net_in_gb')} | {v('net_out_gb')} "
-                f"| {v('disk_read_gb')} | {v('disk_write_gb')} "
-                f"| {v('ebs_io_balance_pct')} | {v('status_check_failures')} |"
+                f"| {v('az')} "
+                f"| {v('cpu_avg_pct')} | {v('cpu_p95_pct')} "
+                f"| {v('mem_p95_pct')} | {v('uptime_hours')} | {v('sample_days')} |"
             )
 
-        lines += [
-            "\n### Raw JSON (full precision)\n",
-            "```json",
-            json.dumps(rows, indent=2, default=str),
-            "```",
-        ]
+        # Removed Raw JSON block to optimize context window for 100+ instances
 
         if pricing_markdown:
             lines.append(pricing_markdown)
@@ -109,9 +201,11 @@ Example Output: instance_type = 'm5.large'
         if "rightsizing" in focus:
             sections.append(
                 "**RIGHTSIZING RECOMMENDATIONS**: For each instance, recommend the optimal "
-                "EC2 instance type based on observed CPU, memory, and network utilisation. "
+                "EC2 instance type based on observed CPU and memory utilisation. "
                 "Use AWS instance family knowledge: t3/t4g for burstable, m7i/m7g for "
                 "general purpose, c7i/c7g for compute-optimised, r7i/r7g for memory-optimised. "
+                "If no change is required for an instance (it is already optimally sized), "
+                "the Recommended Type should be 'No Change'. "
                 "Provide a recommendation table: Instance ID | Current Type | Recommended Type | Reason."
             )
 
@@ -120,18 +214,16 @@ Example Output: instance_type = 'm5.large'
                 "**RISK & PERFORMANCE WARNINGS**: Flag any instance where: "
                 "CPU P95 > 80% (over-provisioned demand), "
                 "CPU avg < 5% (massively under-utilised / candidate for termination), "
-                "Memory P95 > 85% (memory pressure risk), "
-                "EBS IO Balance < 20% (I/O throttling risk), "
-                "Status check failures > 0 (reliability concern). "
+                "Memory P95 > 85% (memory pressure risk). "
                 "Format as a risk table with severity: CRITICAL | HIGH | MEDIUM | LOW."
             )
 
         if "full_report" in focus:
             sections.append(
                 "**FULL MARKDOWN REPORT**: After the tables above, write a complete executive "
-                "summary report including: fleet health overview, top 3 cost optimisation "
+                "summary report including: fleet health overview, top 3 optimisation "
                 "opportunities, top 3 performance risks, recommended action plan with priority "
-                "order, and estimated monthly cost savings (use us-east-1 on-demand pricing). "
+                "order. "
                 "Format with clear markdown headings."
             )
 
@@ -147,7 +239,6 @@ Your job is to analyse the data and produce the following outputs:
 Rules:
 - Be specific — reference exact instance IDs, types, and metric values.
 - Use markdown formatting throughout (tables, headings, bold, code).
-- Use the **provided pricing table** for all cost calculations. Do NOT use memorized or estimated prices. If a price is not in the table, say "pricing unavailable" for that type.
 - In the rightsizing recommendation table, include exactly one row per unique instance ID from the input.
 - Never repeat an instance ID in any recommendation table.
 - If an instance has insufficient data, keep it as a single row for that same instance (do not add a second fallback row).
@@ -189,7 +280,7 @@ If sample_days < 7:
   - rightsizing_reason MUST mention "insufficient data" and the actual number of sample days
 
 ### 2. ZOMBIE / TERMINATION CHECK
-If cpu_avg_pct < 1.0 AND net_in_gb < 0.1 AND net_out_gb < 0.1:
+If cpu_avg_pct < 1.0:
   - rightsizing_action MUST be "terminate"
   - Add flag: zombie with severity HIGH
   - Reason MUST contain words: "idle", "unused", or "terminate"
@@ -219,7 +310,7 @@ CRITICAL family-change rules:
     → Do NOT raise cpu_high for low cpu utilisation
 
   flag: "zombie"
-    → raise if cpu_avg_pct < 1.0 AND network near zero
+    → raise if cpu_avg_pct < 1.0
     → severity: HIGH
 
   flag: "memory_pressure"
@@ -227,15 +318,6 @@ CRITICAL family-change rules:
     → severity: CRITICAL if mem_p95_pct > 95%, else HIGH
     → Do NOT raise memory_pressure for mem_p95_pct < 85%
 
-  flag: "io_throttle"
-    → ONLY raise if ebs_io_balance_pct < 20%
-    → severity: CRITICAL if ebs_io_balance_pct < 10%, else HIGH
-    → detail MUST mention: "EBS", "IO balance", the actual percentage, and "throttling"
-
-  flag: "status_check_failures"
-    → raise if status_check_failures > 0
-    → severity: CRITICAL if failures > 5, HIGH if 1-5
-    → detail MUST mention: "status check", the exact number of failures, and "reliability"
 
   flag: "low_sample_days"
     → raise if sample_days < 7
@@ -265,7 +347,7 @@ Required JSON structure:
       "rightsizing_reason": "one sentence explanation referencing actual metric values",
       "deciding_factors": [
         {
-          "metric": "cpu_avg_pct | cpu_p95_pct | mem_p95_pct | ebs_io_balance_pct | status_check_failures | net_in_gb | sample_days",
+          "metric": "cpu_avg_pct | cpu_p95_pct | mem_p95_pct | sample_days",
           "observed_value": 2.1,
           "threshold": 10,
           "direction": "below_threshold | above_threshold",

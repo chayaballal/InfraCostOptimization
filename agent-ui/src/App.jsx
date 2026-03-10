@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from "recharts";
 
-const API = "http://localhost:8000";
+const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 // Each markdown element maps to a styled React component.
 // This replaces the old fragile regex-based renderer entirely.
@@ -171,7 +171,7 @@ export default function App() {
           try {
             const { token } = JSON.parse(data);
             setOutput(prev => prev + token);
-          } catch {}
+          } catch { /* ignore */ }
         }
       }
       setStatus("done");

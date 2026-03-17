@@ -32,7 +32,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from sqlalchemy import text
 
-from agent_backend.data.database import Database
+from agent_backend.data.local_database import Database
 from agent_backend.cache import AnalysisCache
 from agent_backend.agents.analysis.analysis_agent import LLMService, PromptBuilder
 from agent_backend.agents.orchestrator.savings import SavingsTracker
@@ -404,8 +404,11 @@ async def compare_pricing_endpoint(req: CompareCostRequest):
 async def _get_current_instance_type(instance_id: str) -> Optional[str]:
     """
     Resolve current instance_type for an instance_id from available sources.
-    Tries summary-all (demo + real), then summary, then raw metrics table.
+    Uses the underlying DB method which searches summaries and raw metrics.
     """
+    if hasattr(db, "get_current_instance_type"):
+        return await db.get_current_instance_type(instance_id)
+
     async with db.session_factory() as session:
         sources = [
             (

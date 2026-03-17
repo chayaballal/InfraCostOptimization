@@ -598,26 +598,47 @@ async def _run_script_and_stream(instance_ids: Optional[list[str]] = None, quest
     log.info(f"Executing agent script: {cmd}")
 
     async def stream_process():
-        from asyncio import subprocess as aio_sp
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=aio_sp.PIPE,
-                stderr=aio_sp.STDOUT,
-            )
-            
-            if process.stdout:
-                while True:
-                    line = await process.stdout.readline()
-                    if not line:
-                        break
-                    token = line.decode()
-                    if token:
-                        yield f"data: {json.dumps({'token': token})}\n\n"
-            
-            await process.wait()
-        except Exception as e:
-            yield f"data: {json.dumps({'token': f'Error during agent execution: {e}\n'})}\n\n"
+        # Use a queue and a thread to support streaming on both Windows and Linux
+        # without event loop headaches.
+        q = asyncio.Queue()
+        loop = asyncio.get_event_loop()
+        project_root = Path(__file__).parent.parent
+
+        def producer():
+            import subprocess
+            try:
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    cwd=str(project_root),
+                    text=True,
+                    bufsize=1,
+                )
+                
+                stdout = process.stdout
+                if stdout is not None:
+                    for line in iter(stdout.readline, ''):
+                        if line:
+                            # Push line to async queue safely from thread
+                            loop.call_soon_threadsafe(q.put_nowait, line)
+                
+                process.wait()
+            except Exception as e:
+                loop.call_soon_threadsafe(q.put_nowait, f"Error starting process: {e}\n")
+            finally:
+                # Sentinel to indicate end of stream
+                loop.call_soon_threadsafe(q.put_nowait, None)
+
+        # Start the background execution task
+        _ = asyncio.create_task(asyncio.to_thread(producer))
+
+        # Consume the queue and yield to StreamingResponse
+        while True:
+            line = await q.get()
+            if line is None:
+                break
+            yield f"data: {json.dumps({'token': line})}\n\n"
         
         yield "data: [DONE]\n\n"
 

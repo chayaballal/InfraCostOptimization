@@ -107,7 +107,7 @@ def filter_candidates(df: pd.DataFrame) -> pd.DataFrame:
     )
     for _, row in candidates.iterrows():
         log.info(
-            f"  → {row['instance_id']} ({row['instance_type']}) "
+            f"  -> {row['instance_id']} ({row['instance_type']}) "
             f"cpu_avg={row['cpu_avg_pct']}% cpu_p95={row['cpu_p95_pct']}% "
             f"mem_p95={row['mem_p95_pct']}% | Reason: {row['candidate_reason']}"
         )
@@ -353,13 +353,21 @@ def save_recommendations(llm_result: dict, candidates_df: pd.DataFrame) -> pd.Da
         
         if c_hr is not None and r_hr is not None:
             # Recalculate saving to ensure accuracy
-            calc_saving = round((c_hr - r_hr) * 730, 2)
+            calc_saving = round(float((c_hr - r_hr) * 730), 2)
+            
+            # Ensure incoming saving is a float if it exists
+            incoming_saving = row.get("estimated_monthly_saving_usd")
+            try:
+                incoming_saving = float(incoming_saving) if incoming_saving is not None else 0.0
+            except (ValueError, TypeError):
+                incoming_saving = 0.0
+
             # If agent provided 0 but it's clearly a cost or saving, override
-            if (row["estimated_monthly_saving_usd"] == 0 or row["estimated_monthly_saving_usd"] is None) and calc_saving != 0:
+            if incoming_saving == 0 and calc_saving != 0:
                 row["estimated_monthly_saving_usd"] = calc_saving
             # If agent provided a value but it's wildly different (>10% or >$10), override
-            elif row["estimated_monthly_saving_usd"] is not None:
-                if abs(row["estimated_monthly_saving_usd"] - calc_saving) > max(10, abs(calc_saving) * 0.1):
+            elif incoming_saving != 0:
+                if abs(incoming_saving - calc_saving) > max(10.0, float(abs(calc_saving) * 0.1)):
                     row["estimated_monthly_saving_usd"] = calc_saving
 
         rows.append(row)
@@ -370,12 +378,12 @@ def save_recommendations(llm_result: dict, candidates_df: pd.DataFrame) -> pd.Da
     BASE_DIR.mkdir(parents=True, exist_ok=True)
     df.to_parquet(RECOMMENDATIONS_FILE, index=False, engine="pyarrow", compression="snappy")
 
-    log.info(f"✅ Saved {len(df)} recommendations → {RECOMMENDATIONS_FILE}")
+    log.info(f"Saved {len(df)} recommendations -> {RECOMMENDATIONS_FILE}")
 
     # Also save a human-readable CSV alongside
     csv_path = RECOMMENDATIONS_FILE.with_suffix(".csv")
     df.to_csv(csv_path, index=False)
-    log.info(f"✅ Saved CSV copy  → {csv_path}")
+    log.info(f"Saved CSV copy -> {csv_path}")
 
     return df
 
@@ -391,11 +399,11 @@ def print_summary(llm_result: dict, rec_df: pd.DataFrame):
     print()
 
     if narrative:
-        print("### 📝 Executive Summary")
+        print("### Executive Summary")
         print(f"> {narrative}")
         print()
 
-    print("## 📊 EC2 Rightsizing Recommendation Summary")
+    print("## EC2 Rightsizing Recommendation Summary")
     print()
     print("| Metric | Value |")
     print("| :--- | :--- |")
@@ -409,7 +417,7 @@ def print_summary(llm_result: dict, rec_df: pd.DataFrame):
     print(f"| **Critical risks** | {s.get('critical_risks', 0)} |")
     # print(f"| **Est. Total Monthly Saving** | **${s.get('total_estimated_saving_usd', 0):.2f}** |")
     print()
-    print("### 🛠️ Detailed Recommendations")
+    print("### Detailed Recommendations")
     print()
 
     if not rec_df.empty:
@@ -434,14 +442,14 @@ def print_summary(llm_result: dict, rec_df: pd.DataFrame):
             ]
             print("| " + " | ".join(vals) + " |")
     print()
-    print("✅ **Process complete.** View the full list in the **Recommendations** tab.")
+    print("**Process complete.** View the full list in the **Recommendations** tab.")
 
 
 # ──────────────────────────────────────────────────────────────────
 # MAIN
 # ──────────────────────────────────────────────────────────────────
 async def main():
-    print("### ⚙️ System Logs")
+    print("### System Logs")
     print("---")
     print("```text") # Open log block
     log.info("  EC2 Recommendation Agent — Local File Mode")

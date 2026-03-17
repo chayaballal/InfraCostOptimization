@@ -1,8 +1,15 @@
 """
 database.py — Async database layer for the EC2 Analysis Agent.
 
-Encapsulates the SQLAlchemy async engine, session factory,
-and all raw SQL queries against PostgreSQL.
+This module encapsulates the SQLAlchemy async engine, session factory,
+and all database operations. It uses PostgreSQL as the storage backend
+for EC2 metrics, pricing information, and analysis results.
+
+Key Components:
+- SQLAlchemy Async Engine with pool_pre_ping for stability.
+- Schema Bootstrap: Automated table/index creation on startup.
+- Metrics & Timeseries: Querying pre-aggregated CloudWatch data.
+- Pricing Cache: Optimized batch upserters using native Postgres logic.
 """
 
 import logging
@@ -16,9 +23,20 @@ log = logging.getLogger(__name__)
 
 
 class Database:
-    """Owns the async SQLAlchemy engine and provides typed query methods."""
+    """
+    Manages async connections and operations for the PostgreSQL database.
+    
+    Provides specialized methods for fetching EC2 utilization data and
+    persisting cost/savings analysis results.
+    """
 
     def __init__(self, db_url: str) -> None:
+        """
+        Initializes the async engine and session factory with the provided DB URL.
+        
+        Args:
+            db_url: The connection string for the PostgreSQL database.
+        """
         self.engine = create_async_engine(db_url, pool_pre_ping=True, echo=False)
         self.session_factory = sessionmaker(
             self.engine, class_=AsyncSession, expire_on_commit=False
@@ -27,13 +45,24 @@ class Database:
     # ── Schema bootstrap ──────────────────────────────────────────
 
     async def ensure_schema(self) -> None:
-        """Create indexes and tables if they don't exist."""
+        """
+        Creates all necessary tables and indexes if they don't already exist.
+        
+        This handles:
+        1. Metrics Indexes: For fast lookups on instance_id and time windows.
+        2. Analysis Cache: Stores LLM responses to avoid redundant expensive calls.
+        3. Savings Tracker: The 'Source of Truth' for all optimization recommendations.
+        4. Pricing Cache: Stores hourly on-demand rates fetched from AWS.
+        """
         async with self.engine.begin() as conn:
             try:
+                # 1. Performance index for the main metrics table
                 await conn.execute(text(
                     "CREATE INDEX IF NOT EXISTS idx_ec2_metrics_latest_instance_window "
                     "ON ec2_metrics_latest (instance_id, day_bucket);"
                 ))
+                
+                # 2. Simple K/V cache for LLM text responses
                 await conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS analysis_cache (
                         cache_key     VARCHAR(255) PRIMARY KEY,
@@ -41,6 +70,8 @@ class Database:
                         created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
                     );
                 """))
+                
+                # 3. Central table for Rightsizing and Savings recommendations
                 await conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS savings_tracker (
                         id                           SERIAL PRIMARY KEY,
@@ -61,6 +92,8 @@ class Database:
                         CONSTRAINT uq_savings_instance UNIQUE (instance_id)
                     );
                 """))
+                
+                # 4. Local cache for AWS EC2 instance pricing (Linux, shared tenancy)
                 await conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS ec2_instance_prices (
                         instance_type VARCHAR(64)  NOT NULL,
@@ -70,6 +103,9 @@ class Database:
                         CONSTRAINT pk_ec2_instance_prices PRIMARY KEY (instance_type, region)
                     );
                 """))
+                
+                # Add columns to existing savings_tracker table if they are missing
+                # (Handles iterative schema upgrades without migration scripts)
                 await conn.execute(text("""
                     ALTER TABLE savings_tracker
                         ADD COLUMN IF NOT EXISTS instance_name VARCHAR(255),
@@ -86,6 +122,8 @@ class Database:
                         ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                         ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
                 """))
+                
+                # Composite unique constraint to handle different lookback windows per instance
                 await conn.execute(text("""
                     DO $$
                     BEGIN
@@ -112,7 +150,12 @@ class Database:
         window_days: int,
         instance_ids: list[str],
     ) -> list[dict]:
-        """Pull from v_ec2_llm_summary for the chosen window."""
+        """
+        Retrieves utilization metrics from the v_ec2_llm_summary view.
+        
+        This view pre-calculates averages and percentiles (P95, P99) for CPU and Memory,
+        de-duplicating instances to return the most relevant metadata per ID.
+        """
         where_clauses = ["window_days = :w"]
         params: dict = {"w": window_days}
 
@@ -120,6 +163,8 @@ class Database:
             where_clauses.append("instance_id = ANY(:ids)")
             params["ids"] = instance_ids
 
+        # DISTINCT ON (instance_id) ensures we get exactly one entry per instance,
+        # preferring the one with the most recent metric samples.
         sql = text(f"""
             SELECT *
             FROM (
@@ -147,7 +192,12 @@ class Database:
             return [dict(r) for r in result.mappings().all()]
 
     async def fetch_available_instances(self) -> list[dict]:
-        """Return distinct instances from the base table for the UI selector."""
+        """
+        Fetches distinct instance metadata for population of UI selector dropdowns.
+        
+        Returns:
+            A list of dictionaries, each containing instance metadata (id, name, type, etc.).
+        """
         sql = text("""
             SELECT DISTINCT ON (instance_id)
                 instance_id, instance_name, instance_type, az, platform
@@ -163,7 +213,16 @@ class Database:
     async def fetch_timeseries(
         self, instance_id: str, window_days: int
     ) -> list[dict]:
-        """Daily CPU + Memory time-series for a single instance."""
+        """
+        Fetches 1-day bucketed CPU and Memory averages/peaks for chart visualization.
+        
+        Args:
+            instance_id: The ID of the instance to fetch data for.
+            window_days: The number of days of history to retrieve.
+            
+        Returns:
+            A list of dictionaries with date and various metric statistics.
+        """
         sql = text("""
             SELECT
                 TO_CHAR(day_bucket, 'YYYY-MM-DD') AS date,
@@ -184,7 +243,16 @@ class Database:
     async def fetch_timeseries_compare(
         self, instance_ids: list[str], window_days: int
     ) -> list[dict]:
-        """Daily CPU + Memory time-series for multiple instances (raw rows)."""
+        """
+        Comparative daily CPU/Mem stats for multiple instances (raw rows).
+        
+        Args:
+            instance_ids: List of instance IDs to compare.
+            window_days: Time window for history.
+            
+        Returns:
+            A list of metric data points for multiple instances.
+        """
         sql = text("""
             SELECT
                 TO_CHAR(day_bucket, 'YYYY-MM-DD') AS date,
@@ -209,9 +277,10 @@ class Database:
         instance_ids: Optional[list[str]] = None,
     ) -> list[dict]:
         """
-        Return per-instance uptime data from v_ec2_llm_summary.
-        uptime_days = sample_days (days with metric data).
-        uptime_hours = SUM of daily_active_hours (computed from raw S3 timestamps).
+        Returns per-instance uptime figures (days with metrics and total hours).
+        
+        uptime_days = total unique days where at least one metric point exists.
+        uptime_hours = cumulative active hours (extracted from raw S3 metric timestamps).
         """
         where_clauses = []
         params: dict = {}
@@ -250,7 +319,10 @@ class Database:
     async def auto_select_instances(
         self, window_days: int, condition: str
     ) -> list[str]:
-        """Run a dynamic WHERE clause and return matching instance IDs."""
+        """
+        Executes a dynamic WHERE clause generated by the LLM.
+        Returns a list of instance IDs matching the natural language criteria.
+        """
         sql = text(
             f"SELECT instance_id FROM v_ec2_llm_summary "
             f"WHERE window_days = :w AND ({condition})"
@@ -262,23 +334,50 @@ class Database:
     # ── Pricing Cache ─────────────────────────────────────────────
 
     async def get_cached_prices(self, region: str) -> dict[str, float]:
-        """Fetch all cached prices for a region from the database."""
+        """
+        Retrieves all cached instance prices for a specific region from the database.
+        
+        Args:
+            region: The AWS region (e.g., 'us-east-1').
+            
+        Returns:
+            A dictionary mapping instance types to their hourly costs in USD.
+        """
         sql = text("SELECT instance_type, hourly_usd FROM ec2_instance_prices WHERE region = :region")
         async with self.session_factory() as session:
             result = await session.execute(sql, {"region": region})
             return {r[0]: r[1] for r in result.all()}
 
     async def upsert_prices(self, prices: list[dict]) -> None:
-        """Add or update prices in the database."""
+        """
+        Atomically bulk-upserts a list of instance prices.
+        
+        This uses SQLAlchemy's PostgreSQL native 'ON CONFLICT DO UPDATE' logic.
+        This approach is significantly more reliable with the asyncpg driver than raw 
+        SQL text batching for large arrays.
+        """
         if not prices:
             return
         
-        sql = text("""
-            INSERT INTO ec2_instance_prices (instance_type, region, hourly_usd, updated_at)
-            VALUES (:instance_type, :region, :hourly_usd, NOW())
-            ON CONFLICT (instance_type, region) DO UPDATE SET 
-                hourly_usd = EXCLUDED.hourly_usd,
-                updated_at = NOW()
-        """)
+        from sqlalchemy import table, column, String, Float, text
+        from sqlalchemy.dialects.postgresql import insert
+
+        # Define an ad-hoc table construct for the upsert statement
+        ec2_instance_prices = table("ec2_instance_prices",
+            column("instance_type", String),
+            column("region", String),
+            column("hourly_usd", Float),
+            column("updated_at")
+        )
+
+        # Build the batch insert/upsert statement
+        stmt = insert(ec2_instance_prices).values(prices)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["instance_type", "region"],  # Conflicts if type+region already exists
+            set_=dict(
+                hourly_usd=stmt.excluded.hourly_usd,     # Update to the new price
+                updated_at=text("NOW()")                 # Refresh the timestamp
+            )
+        )
         async with self.engine.begin() as conn:
-            await conn.execute(sql, prices)
+            await conn.execute(stmt)

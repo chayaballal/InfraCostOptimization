@@ -1,21 +1,13 @@
 """
-╔══════════════════════════════════════════════════════════════════╗
-║         EC2 CloudWatch Metrics → Parquet → S3 Loader             ║
-║                                                                  ║
-║  • Separate credentials for CloudWatch and S3                    ║
-║  • Auto-discovers ALL EC2 instances dynamically                  ║
-║  • Pulls all standard EC2 + MemoryUtilization metrics            ║
-║  • Restructures into analytics-ready Parquet schema              ║
-║  • Hive-style date-partitioned S3 upload                         ║
-║  • All secrets loaded from .env                                  ║
-╚══════════════════════════════════════════════════════════════════╝
+EC2 CloudWatch Metrics → Parquet → S3 Loader
 
-Dependencies:
-    pip install boto3 pandas pyarrow python-dotenv
-
-Setup:
-    1. Fill in your .env file
-    2. python ec2_metrics_to_s3.py
+This module is responsible for:
+- Discovering all EC2 instances in a specified AWS region.
+- Fetching standard EC2 metrics (CPU, Credit Usage, etc.) from CloudWatch.
+- Fetching memory metrics (MemoryUtilization) if the CloudWatch Agent is installed.
+- Processing raw datapoints into a structured, analytics-ready pandas DataFrame.
+- Exporting the data as Snappy-compressed Parquet files.
+- Uploading the results to S3 with Hive-style partitioning (year/month/day).
 """
 
 import os
@@ -108,10 +100,11 @@ MEMORY_METRICS: List[Dict[str, Any]] = [
 # ──────────────────────────────────────────────────────────────────
 def create_clients(cfg: Dict) -> Tuple[Any, Any, Any]:
     """
-    Create 3 boto3 clients:
-      - ec2_client    → uses CloudWatch credentials (same account)
-      - cw_client     → CloudWatch read access
-      - s3_client     → separate S3 IAM credentials
+    Initializes AWS service clients using the provided configuration.
+    Supports separate credentials for source (CloudWatch) and destination (S3).
+    
+    Returns:
+        A tuple of (ec2_client, cw_client, s3_client).
     """
     cw_session = boto3.Session(
         aws_access_key_id=cfg["cw_access_key"],
@@ -177,7 +170,10 @@ def fetch_metric_datapoints(
     end_time: datetime,
     period: int,
 ) -> List[Dict]:
-    """Fetch datapoints for one metric, one namespace, one set of dimensions."""
+    """
+    Low-level wrapper around CloudWatch 'get_metric_statistics'.
+    Handles both standard and extended statistics (percentiles).
+    """
     metric_name = metric_def["metric"]
     stats       = metric_def["stats"]
     category    = metric_def["category"]
@@ -238,9 +234,8 @@ def fetch_instance_metrics(
     period: int,
 ) -> List[Dict]:
     """
-    Fetch ALL metrics for a single EC2 instance:
-      1. Standard EC2 metrics   → namespace: AWS/EC2, dimension: InstanceId
-      2. Memory metrics          → namespace: CWAgent (or custom), dimension: InstanceId
+    Orchestrates the fetching of all relevant metrics for a single instance.
+    Includes instance metadata in every resulting record.
     """
     instance_id = instance_meta["instance_id"]
     all_records = []

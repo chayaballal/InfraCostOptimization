@@ -1,3 +1,9 @@
+/**
+ * Global styles and CSS variables for the EC2 Analysis Agent.
+ * This file contains base resets and typography settings.
+ * Note: Most of the layout and component-specific styling is handled
+ * directly in App.jsx using a <style> block for rapid prototyping.
+ */
 :root {
   font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;

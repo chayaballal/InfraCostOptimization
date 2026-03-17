@@ -625,6 +625,261 @@ function SavingsBoard() {
   );
 }
 
+// ── Action badge & helpers for Recommendations panel ────────────
+const REC_ACTION_STYLE = {
+  terminate:         { bg: "#fee2e2", border: "#fca5a5", color: "#dc2626", label: "TERMINATE"   },
+  downsize:          { bg: "#fef3c7", border: "#fcd34d", color: "#d97706", label: "DOWNSIZE"    },
+  upsize:            { bg: "#dcfce7", border: "#86efac", color: "#16a34a", label: "UPSIZE"      },
+  change_family:     { bg: "#ede9fe", border: "#c4b5fd", color: "#7c3aed", label: "CHG FAMILY"  },
+  keep:              { bg: "#e0f2fe", border: "#7dd3fc", color: "#0891b2", label: "KEEP"        },
+  insufficient_data: { bg: "#f5f5f4", border: "#d6d3d1", color: "#78716c", label: "INSUF. DATA" },
+};
+
+const REC_FLAG_COLOUR = {
+  zombie:          "#dc2626",
+  cpu_high:        "#d97706",
+  memory_pressure: "#7c3aed",
+  low_sample_days: "#78716c",
+};
+
+function RecActionBadge({ action }) {
+  const s = REC_ACTION_STYLE[action] || REC_ACTION_STYLE.keep;
+  return (
+    <span style={{
+      display: "inline-block", padding: "2px 9px", borderRadius: 20,
+      border: `1px solid ${s.border}`, background: s.bg, color: s.color,
+      fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", whiteSpace: "nowrap",
+      fontFamily: "var(--mono)",
+    }}>
+      {s.label}
+    </span>
+  );
+}
+
+function RecRiskChip({ flag, severity }) {
+  const col = REC_FLAG_COLOUR[flag] || "#78716c";
+  return (
+    <span title={severity} style={{
+      display: "inline-block", padding: "1px 7px", borderRadius: 20,
+      background: `${col}18`, border: `1px solid ${col}40`, color: col,
+      fontSize: 9, fontWeight: 600, letterSpacing: "0.05em",
+      whiteSpace: "nowrap", marginRight: 4, marginBottom: 2,
+    }}>
+      {flag.replace(/_/g, " ")}
+    </span>
+  );
+}
+
+function RecConfidenceDot({ confidence }) {
+  const map = { high: "#16a34a", medium: "#d97706", low: "#dc2626" };
+  const col = map[confidence] || "#78716c";
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+      <span style={{ width: 7, height: 7, borderRadius: "50%", background: col, flexShrink: 0 }} />
+      <span style={{ fontSize: 11, color: col, fontWeight: 600 }}>{confidence}</span>
+    </span>
+  );
+}
+
+// ── Recommendations Panel ─────────────────────────────────────────
+function RecommendationsPanel() {
+  const [data, setData]       = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState(null);
+  const [filter, setFilter]   = useState("all");
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    fetch(`${API}/recommendations`)
+      .then(r => r.json())
+      .then(d => { if (d.error) setError(d.error); setData(d); })
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (loading) return (
+    <div style={{ padding: 36, display: "flex", flexDirection: "column", gap: 12 }}>
+      {[1,2,3,4,5].map(i => <div key={i} className="skeleton" style={{ height: 52 }} />)}
+    </div>
+  );
+
+  if (error) return (
+    <div style={{ padding: 36 }}>
+      <div style={{ padding: 16, borderRadius: 8, border: "1px solid #fca5a5", background: "#fee2e2", color: "#dc2626", fontSize: 13, marginBottom: 16 }}>{error}</div>
+      <button className="btn btn-primary" onClick={load}>Retry</button>
+    </div>
+  );
+
+  if (!data) return null;
+
+  const recs    = data.recommendations || [];
+  const summary = data.summary || {};
+  const actions = summary.action_counts || {};
+
+  const filterOptions = [
+    { id: "all",               label: `All (${recs.length})` },
+    { id: "terminate",         label: `Terminate (${actions.terminate || 0})` },
+    { id: "downsize",          label: `Downsize (${actions.downsize || 0})` },
+    { id: "upsize",            label: `Upsize (${actions.upsize || 0})` },
+    { id: "change_family",     label: `Chg Family (${actions.change_family || 0})` },
+    { id: "keep",              label: `Keep (${actions.keep || 0})` },
+    { id: "insufficient_data", label: `Insuf. Data (${actions.insufficient_data || 0})` },
+  ];
+
+  const filtered = filter === "all" ? recs : recs.filter(r => r.rightsizing_action === filter);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+
+      {/* Summary bar */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 24, flexWrap: "wrap",
+        padding: "16px 32px", borderBottom: "1px solid var(--border)",
+        background: "var(--canvas)", flexShrink: 0,
+      }}>
+        {/* Total saving */}
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          <span style={{ fontSize: 10, fontWeight: 600, color: "var(--muted)", letterSpacing: "0.1em", textTransform: "uppercase" }}>Est. Monthly Saving</span>
+          <span style={{ fontSize: 26, fontWeight: 700, color: "#16a34a", lineHeight: 1.1 }}>
+            ${(summary.total_estimated_saving_usd || 0).toFixed(2)}
+          </span>
+        </div>
+
+        <div style={{ width: 1, height: 40, background: "var(--border)", flexShrink: 0 }} />
+
+        {/* Action breakdown */}
+        {Object.entries(REC_ACTION_STYLE).map(([key, s]) => {
+          const cnt = actions[key] || 0;
+          if (!cnt) return null;
+          return (
+            <div key={key} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+              <span style={{ fontSize: 20, fontWeight: 700, color: s.color }}>{cnt}</span>
+              <span style={{ fontSize: 9, fontWeight: 600, color: "var(--muted)", letterSpacing: "0.08em", textTransform: "uppercase" }}>{s.label}</span>
+            </div>
+          );
+        })}
+
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+          <span style={{ fontSize: 11, color: "var(--muted)" }}>{summary.total_candidates || 0} candidates analysed</span>
+          <button
+            onClick={load}
+            style={{
+              padding: "6px 14px", borderRadius: 6, border: "1px solid var(--border)",
+              background: "var(--canvas)", color: "var(--text2)", fontSize: 12, cursor: "pointer",
+              display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 500,
+            }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      {/* Filter pills */}
+      <div style={{
+        display: "flex", gap: 6, padding: "10px 32px",
+        borderBottom: "1px solid var(--border)", flexShrink: 0, flexWrap: "wrap",
+        background: "var(--canvas)",
+      }}>
+        {filterOptions.map(f => (
+          <button
+            key={f.id}
+            onClick={() => setFilter(f.id)}
+            style={{
+              padding: "4px 14px", borderRadius: 20,
+              border: "1px solid",
+              borderColor: filter === f.id ? "var(--accent)" : "var(--border)",
+              background: filter === f.id ? "var(--accent-lt)" : "transparent",
+              color: filter === f.id ? "var(--accent)" : "var(--muted)",
+              fontSize: 11, fontWeight: 600, cursor: "pointer", transition: "all 0.15s",
+            }}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Table */}
+      <div style={{ flex: 1, overflowY: "auto" }}>
+        {filtered.length === 0 ? (
+          <div style={{ padding: 64, textAlign: "center", color: "var(--muted)", fontSize: 14 }}>
+            No recommendations in this category.
+          </div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead style={{ position: "sticky", top: 0, zIndex: 1 }}>
+              <tr style={{ background: "var(--canvas)", borderBottom: "2px solid var(--border)" }}>
+                {["Instance", "Name", "Current Type", "Recommended", "Action", "Reason", "Saving /mo", "Confidence", "Risk Flags"].map(h => (
+                  <th key={h} style={{
+                    padding: "9px 14px", textAlign: "left", fontSize: 10,
+                    fontWeight: 700, color: "var(--muted)", letterSpacing: "0.08em",
+                    textTransform: "uppercase", whiteSpace: "nowrap",
+                    background: "var(--canvas)",
+                  }}>
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((r, idx) => {
+                let flags = [];
+                try { flags = r.risk_flags ? JSON.parse(r.risk_flags) : []; } catch {}
+                const saving    = r.estimated_monthly_saving_usd;
+                const savingStr = saving != null && saving !== 0 ? `$${parseFloat(saving).toFixed(2)}` : "—";
+                const savingCol = saving > 0 ? "#16a34a" : saving < 0 ? "#dc2626" : "var(--muted)";
+
+                return (
+                  <tr
+                    key={idx}
+                    style={{ borderBottom: "1px solid var(--border)", transition: "background 0.1s" }}
+                    onMouseEnter={e => e.currentTarget.style.background = "var(--highlight)"}
+                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                  >
+                    <td style={{ padding: "10px 14px", fontFamily: "var(--mono)", color: "var(--accent)", fontSize: 11, whiteSpace: "nowrap" }}>
+                      {r.instance_id}
+                    </td>
+                    <td style={{ padding: "10px 14px", color: "var(--text)", fontWeight: 500, whiteSpace: "nowrap" }}>
+                      {r.instance_name || "—"}
+                    </td>
+                    <td style={{ padding: "10px 14px", fontFamily: "var(--mono)", color: "var(--text2)", whiteSpace: "nowrap" }}>
+                      {r.current_type || "—"}
+                    </td>
+                    <td style={{ padding: "10px 14px", fontFamily: "var(--mono)", fontWeight: 700, whiteSpace: "nowrap", color: "var(--text)" }}>
+                      {r.recommended_type || <span style={{ color: "var(--muted)" }}>—</span>}
+                    </td>
+                    <td style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>
+                      <RecActionBadge action={r.rightsizing_action} />
+                    </td>
+                    <td style={{ padding: "10px 14px", color: "var(--muted)", maxWidth: 260, lineHeight: 1.5 }}>
+                      {r.rightsizing_reason || "—"}
+                    </td>
+                    <td style={{ padding: "10px 14px", color: savingCol, fontWeight: 700, whiteSpace: "nowrap" }}>
+                      {savingStr}
+                    </td>
+                    <td style={{ padding: "10px 14px" }}>
+                      <RecConfidenceDot confidence={r.confidence} />
+                    </td>
+                    <td style={{ padding: "10px 14px", minWidth: 130 }}>
+                      {flags.length === 0
+                        ? <span style={{ color: "var(--muted)", fontSize: 11 }}>—</span>
+                        : flags.map((f, fi) => <RecRiskChip key={fi} flag={f.flag} severity={f.severity} />)
+                      }
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main App ──────────────────────────────────────────────────────
 export default function App() {
   const [instances, setInstances]       = useState([]);
@@ -792,9 +1047,13 @@ export default function App() {
     }
     setAnalysedInstanceIds(finalIds);
 
+    // Use the recommendation agent if the "table" focus is selected
+    const useAgent = focus.includes("table");
+    const endpoint = useAgent ? `${API}/run-recommendation-agent` : `${API}/analyse`;
+
     // Report generation phase
     try {
-      const res = await fetch(`${API}/analyse`, {
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: abortRef.current.signal,
@@ -802,7 +1061,7 @@ export default function App() {
           window_days:  win,
           instance_ids: finalIds,
           question:     question || null,
-          focus,
+          focus:        focus.filter(f => f !== "table"),
         }),
       });
 
@@ -833,6 +1092,10 @@ export default function App() {
         }
       }
       setStatus("done");
+      if (useAgent) {
+        // Switch to the recommendations tab after the agent finishes updating the file
+        setActiveView("recommendations");
+      }
     } catch (e) {
       if (e.name !== "AbortError") {
         setError(e.message);
@@ -855,6 +1118,7 @@ export default function App() {
     { id: "rightsizing",   label: "Rightsizing",   desc: "Instance type recommendations" },
     { id: "risk_warnings", label: "Risk Warnings", desc: "Performance & reliability flags" },
     { id: "full_report",   label: "Full Report",   desc: "Executive summary & action plan" },
+    { id: "table",         label: "Recommendation Table", desc: "Update the structured AI recommendations file" },
   ];
 
   const windowOptions = [
@@ -1558,7 +1822,8 @@ export default function App() {
               {[
                 { id: "analysis", label: "Analysis",    icon: "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" },
                 { id: "compare",  label: selected.length >= 2 ? `Compare (${selected.length})` : "Compare", icon: "M22 12 18 12 15 21 9 3 6 12 2 12" },
-                { id: "savings",  label: "Savings Board", icon: "M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" },
+                { id: "savings",         label: "Savings Board",    icon: "M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" },
+                { id: "recommendations", label: "Recommendations",  icon: "M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" },
               ].map(tab => (
                 <button
                   key={tab.id}
@@ -1616,6 +1881,11 @@ export default function App() {
               {/* Savings Board view */}
               {activeView === "savings" && (
                 <SavingsBoard />
+              )}
+
+              {/* Recommendations view */}
+              {activeView === "recommendations" && (
+                <RecommendationsPanel />
               )}
 
               {/* Analysis view */}

@@ -1,19 +1,11 @@
 """
-╔══════════════════════════════════════════════════════════════════╗
-║   EC2 CloudWatch Metrics — S3 Parquet → PostgreSQL ETL           ║
-║                                                                  ║
-║   • Reads Parquet from S3 (using S3 credentials)                 ║
-║   • Aggregates raw 1-min data to daily buckets                   ║
-║   • Upserts into ec2_metrics_latest                               ║
-║   • Automatically refreshes 10/30/60/90-day views                ║
-║   • Exposes v_ec2_llm_summary — LLM-ready pivot table            ║
-║                                                                  ║
-║   Run:  python s3_to_postgres_etl.py                             ║
-║   Cron: 0 1 * * * python /path/to/s3_to_postgres_etl.py         ║
-╚══════════════════════════════════════════════════════════════════╝
+EC2 CloudWatch Metrics — S3 Parquet → PostgreSQL ETL
 
-Dependencies:
-    pip install boto3 pandas pyarrow sqlalchemy psycopg2-binary python-dotenv s3fs
+This module handles the Extraction, Transformation, and Loading (ETL) process:
+- Extract: Reads Parquet files from S3 that were produced by CloudWatch export.
+- Transform: Aggregates sub-minute data into daily buckets (averages, peaks, etc.).
+- Load: Upserts the aggregated data into the `ec2_metrics_latest` table in PostgreSQL.
+- Orchestration: Manages watermarks to ensure only new files are processed.
 """
 
 import os
@@ -48,6 +40,13 @@ load_dotenv()
 # CONFIG
 # ──────────────────────────────────────────────────────────────────
 def load_config() -> dict:
+    """
+    Loads ETL configuration from environment variables.
+    Ensures all required keys are present for S3 and Database access.
+    
+    Returns:
+        A dictionary containing configuration parameters.
+    """
     required = [
         "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY",
         "S3_BUCKET", "S3_PREFIX",
@@ -77,7 +76,14 @@ def load_config() -> dict:
 # ──────────────────────────────────────────────────────────────────
 def extract_from_s3(cfg: dict, engine) -> tuple[pd.DataFrame, str]:
     """
-    Read new Parquet files from S3 prefix using s3fs + pandas and a watermark.
+    Extracts new Parquet files from S3 based on a watermark.
+    
+    Args:
+        cfg: Configuration dictionary.
+        engine: SQLAlchemy engine for watermark tracking.
+        
+    Returns:
+        A tuple containing (DataFrame of combined new metrics, last processed file path).
     """
     s3_path = f"s3://{cfg['s3_bucket']}/{cfg['s3_prefix']}/"
     log.info(f"Reading Parquet from {s3_path} ...")
@@ -201,8 +207,8 @@ def transform_to_daily(df: pd.DataFrame) -> pd.DataFrame:
 # ──────────────────────────────────────────────────────────────────
 def upsert_to_postgres(df: pd.DataFrame, engine) -> int:
     """
-    Upsert daily-aggregated rows using COPY into a staging table, 
-    followed by an INSERT ... ON CONFLICT UPDATE for fast writes.
+    Performs a high-performance upsert of the aggregated metrics into PostgreSQL.
+    Uses a temporary staging table and the Postgres COPY command for speed.
     """
     if df.empty:
         log.warning("Nothing to upsert — DataFrame is empty.")

@@ -12,13 +12,17 @@ import logging
 from typing import Optional
 
 from sqlalchemy import text
-from agent_backend.mcp_aws_pricing import get_price_with_mcp_fallback
+from agent_backend.agents.cost.cost_agent import get_pricing_table_async
 
 log = logging.getLogger(__name__)
 
 
 class SavingsTracker:
-    """CRUD operations for the savings_tracker table."""
+    """
+    Manages the lifecycle of cost-saving recommendations.
+    Provides CRUD operations for the `savings_tracker` table and
+    implements logic to extract structured recommendations from LLM markdown.
+    """
 
     VALID_STATUSES = {"Proposed", "Investigating", "Implemented", "Rejected"}
 
@@ -41,8 +45,13 @@ class SavingsTracker:
         current_monthly_price_usd: Optional[float] = None,
         recommended_monthly_price_usd: Optional[float] = None,
     ) -> dict:
+        """
+        Creates or updates a single savings record.
+        Uses UPSERT logic (ON CONFLICT) to maintain one active record per instance.
+        """
         async with self._db.session_factory() as session:
-            result = await session.execute(text("""
+            result = await session.execute(
+                text("""
                 INSERT INTO savings_tracker
                     (instance_id, instance_name, current_type, recommended_type,
                      recommendation, current_monthly_cost_usd, recommended_monthly_cost_usd,
@@ -64,22 +73,28 @@ class SavingsTracker:
                     window_days                  = COALESCE(EXCLUDED.window_days, savings_tracker.window_days),
                     updated_at                   = NOW()
                 RETURNING id, created_at, status
-            """), {
-                "iid":    instance_id,
-                "iname":  instance_name,
-                "ctype":  current_type,
-                "rtype":  recommended_type,
-                "rec":    recommendation,
-                "cur_cost": current_monthly_cost_usd,
-                "rec_cost": recommended_monthly_cost_usd,
-                "saving": estimated_monthly_saving_usd,
-                "win":    window_days,
-                "cprice": current_monthly_price_usd,
-                "rprice": recommended_monthly_price_usd,
-            })
+            """),
+                {
+                    "iid": instance_id,
+                    "iname": instance_name,
+                    "ctype": current_type,
+                    "rtype": recommended_type,
+                    "rec": recommendation,
+                    "cur_cost": current_monthly_cost_usd,
+                    "rec_cost": recommended_monthly_cost_usd,
+                    "saving": estimated_monthly_saving_usd,
+                    "win": window_days,
+                    "cprice": current_monthly_price_usd,
+                    "rprice": recommended_monthly_price_usd,
+                },
+            )
             await session.commit()
             row = result.mappings().fetchone()
-            return {"id": row["id"], "created_at": str(row["created_at"]), "status": row["status"]}
+            return {
+                "id": row["id"],
+                "created_at": str(row["created_at"]),
+                "status": row["status"],
+            }
 
     # ── Bulk create from LLM markdown ─────────────────────────────
 
@@ -89,8 +104,14 @@ class SavingsTracker:
         instances: list[dict],
         window_days: int,
     ) -> dict:
+        """
+        Processes a full LLM narrative report, parses the embedded recommendation table,
+        and synchronizes the database records for all involved instances.
+        """
         rec_map = self.parse_recommendations(markdown_text, instances)
-        log.info(f"Bulk savings parse: found {len(rec_map)} recommendations from {len(instances)} instances")
+        log.info(
+            f"Bulk savings parse: found {len(rec_map)} recommendations from {len(instances)} instances"
+        )
 
         saved = []
         async with self._db.session_factory() as session:
@@ -98,35 +119,45 @@ class SavingsTracker:
                 iid = inst.get("instance_id")
                 rec = rec_map.get(iid, {})
                 # Structured prices sent by frontend (meta) or parsed from markdown (rec)
-                cprice = inst.get("current_monthly_price_usd") or rec.get("current_price")
-                rprice = inst.get("recommended_monthly_price_usd") or rec.get("recommended_price")
+                cprice = inst.get("current_monthly_price_usd") or rec.get(
+                    "current_price"
+                )
+                rprice = inst.get("recommended_monthly_price_usd") or rec.get(
+                    "recommended_price"
+                )
 
                 # Fallback to fetching prices if missing
                 if cprice is None and inst.get("instance_type"):
                     try:
-                        p_data = await get_price_with_mcp_fallback(inst["instance_type"], "us-east-1")
-                        cprice = p_data.get("monthly_usd")
+                        p_data = await get_pricing_table_async(
+                            [inst["instance_type"]], "us-east-1"
+                        )
+                        cprice = p_data.get(inst["instance_type"], {}).get(
+                            "monthly_usd"
+                        )
                     except Exception as e:
                         log.warning(f"Failed fallback cprice fetch for {iid}: {e}")
 
                 if rprice is None and rec.get("recommended_type"):
                     rtype_norm = rec["recommended_type"]
-                    # Quick extraction if it's a "t3.medium (Save $...)" string
-                    m = re.search(r"([a-z0-9]+\.[a-z0-9]+)", rtype_norm.lower())
-                    if m:
-                        rtype_norm = m.group(1)
-                    
+                    # Extract valid EC2 instance type token from free text
+                    m = re.search(r"\b([a-z0-9]+\.[a-z0-9]+)\b", rtype_norm.lower())
+                    rtype_norm = m.group(1) if m else None
+
                     try:
-                        p_data = await get_price_with_mcp_fallback(rtype_norm, "us-east-1")
-                        rprice = p_data.get("monthly_usd")
+                        p_data = await get_pricing_table_async(
+                            [rtype_norm], "us-east-1"
+                        )
+                        rprice = p_data.get(rtype_norm, {}).get("monthly_usd")
                     except Exception as e:
                         log.warning(f"Failed fallback rprice fetch for {iid}: {e}")
 
                 # Calculate savings if pieces are missing from markdown but sent in meta
-                if (cprice is not None and rprice is not None):
+                if cprice is not None and rprice is not None:
                     rec["saving"] = round(float(cprice) - float(rprice), 2)
 
-                result = await session.execute(text("""
+                result = await session.execute(
+                    text("""
                     INSERT INTO savings_tracker
                         (instance_id, instance_name, current_type, recommended_type,
                          recommendation, current_monthly_cost_usd, recommended_monthly_cost_usd,
@@ -162,15 +193,21 @@ class SavingsTracker:
                     "rprice": rprice,
                 })
                 row = result.mappings().fetchone()
-                saved.append({
-                    "id": row["id"],
-                    "instance_id": iid,
-                    "recommended_type": rec.get("recommended_type"),
-                    "status": row["status"],
-                })
+                saved.append(
+                    {
+                        "id": row["id"],
+                        "instance_id": iid,
+                        "recommended_type": rec.get("recommended_type"),
+                        "status": row["status"],
+                    }
+                )
             await session.commit()
 
-        return {"saved": len(saved), "parsed_recommendations": len(rec_map), "entries": saved}
+        return {
+            "saved": len(saved),
+            "parsed_recommendations": len(rec_map),
+            "entries": saved,
+        }
 
     # ── List ──────────────────────────────────────────────────────
 
@@ -195,7 +232,7 @@ class SavingsTracker:
                    current_monthly_price_usd, recommended_monthly_price_usd,
                    window_days, created_at, updated_at
             FROM savings_tracker
-            WHERE {' AND '.join(where)}
+            WHERE {" AND ".join(where)}
               AND EXISTS (
                   SELECT 1
                   FROM savings_tracker m
@@ -209,7 +246,8 @@ class SavingsTracker:
 
         total_saving = sum(
             float(r["estimated_monthly_saving_usd"] or 0)
-            for r in rows if r["status"] == "Implemented"
+            for r in rows
+            if r["status"] == "Implemented"
         )
         return {
             "entries": [dict(r) for r in rows],
@@ -220,16 +258,22 @@ class SavingsTracker:
     # ── Update status ─────────────────────────────────────────────
 
     async def update_status(self, entry_id: int, status: str) -> dict:
+        """
+        Updates the workflow status of a recommendation (e.g., from 'Proposed' to 'Implemented').
+        """
         if status not in self.VALID_STATUSES:
             raise ValueError(f"Status must be one of {self.VALID_STATUSES}")
 
         async with self._db.session_factory() as session:
-            result = await session.execute(text("""
+            result = await session.execute(
+                text("""
                 UPDATE savings_tracker
                 SET status = :status, updated_at = NOW()
                 WHERE id = :id
                 RETURNING id, status, updated_at
-            """), {"status": status, "id": entry_id})
+            """),
+                {"status": status, "id": entry_id},
+            )
             await session.commit()
             row = result.mappings().fetchone()
             if not row:
@@ -269,7 +313,14 @@ class SavingsTracker:
             if any("recommend" in c for c in lower_cells):
                 headers = lower_cells
                 for i, h in enumerate(headers):
-                    for key in ("instance", "current", "recommend", "saving", "reason", "action"):
+                    for key in (
+                        "instance",
+                        "current",
+                        "recommend",
+                        "saving",
+                        "reason",
+                        "action",
+                    ):
                         if key in h:
                             header_indices[key] = i
                     # Price detection
@@ -298,7 +349,10 @@ class SavingsTracker:
 
             if not matched_iid:
                 for inst in instances:
-                    if inst.get("instance_name") and inst["instance_name"].lower() in row_text.lower():
+                    if (
+                        inst.get("instance_name")
+                        and inst["instance_name"].lower() in row_text.lower()
+                    ):
                         matched_iid = inst["instance_id"]
                         break
 
@@ -314,12 +368,12 @@ class SavingsTracker:
                 # Try to extract specific prices from columns
                 cprice = None
                 rprice = None
-                
+
                 if "current_price" in header_indices:
                     try:
                         cp_raw = cells[header_indices["current_price"]]
                         m = re.search(r"([\d,]+(?:\.\d+)?)", cp_raw)
-                        if m: 
+                        if m:
                             cprice = float(m.group(1).replace(",", ""))
                     except (IndexError, ValueError, TypeError):
                         pass
@@ -327,7 +381,7 @@ class SavingsTracker:
                     try:
                         rp_raw = cells[header_indices["recommended_price"]]
                         m = re.search(r"([\d,]+(?:\.\d+)?)", rp_raw)
-                        if m: 
+                        if m:
                             rprice = float(m.group(1).replace(",", ""))
                     except (IndexError, ValueError, TypeError):
                         pass

@@ -1,16 +1,13 @@
 """
-╔══════════════════════════════════════════════════════════════════╗
-║   EC2 Analysis Agent — Live Instance Report                      ║
-║                                                                  ║
-║  Fetches real EC2 instances from the database, runs the LLM      ║
-║  analysis, and produces a factor-verification report showing     ║
-║  exactly which metrics drove each recommendation.                ║
-║                                                                  ║
-║  Run:                                                            ║
-║      uv run python live_report.py                                ║
-║      uv run python live_report.py --window 60                    ║
-║      uv run python live_report.py --instance i-0abc123           ║
-╚══════════════════════════════════════════════════════════════════╝
+EC2 Analysis Agent — Live Instance Report
+
+This tool generates a comprehensive HTML report by fetching real-time data from 
+the EC2 fleet and running it through the LLM analysis agent. It provides a 
+visual summary of:
+1. Live instance health based on key metrics thresholds.
+2. LLM rightsizing recommendations and confidence levels.
+3. Deciding factors accuracy compared to an automated baseline.
+4. Infrastructure-level risk flags.
 """
 
 import argparse
@@ -45,9 +42,9 @@ THRESHOLDS = {
 # ── Derive expected factors automatically from real metric values ─
 def derive_expected_factors(metrics: dict) -> dict:
     """
-    Given real metric values, derive what the correct primary factor
-    should be using the same threshold logic as the eval system prompt.
-    Returns a dict matching the deciding_factors schema in eval_scenarios.json.
+    Automated heuristic to determine the expected primary metric driver 
+    based on raw metric values. This serves as a 'ground truth' baseline 
+    to verify the LLM's reasoning accuracy.
     """
     cpu_avg   = metrics.get("cpu_avg_pct") or 0
     cpu_p95   = metrics.get("cpu_p95_pct") or 0
@@ -198,7 +195,10 @@ def score_factors(llm_instance: dict, expected_factors: dict) -> list[dict]:
 
 # ── Metric health assessment ───────────────────────────────────────
 def assess_metric_health(metrics: dict) -> list[dict]:
-    """Return a list of metric health assessments with status and thresholds."""
+    """
+    Evaluates raw metrics against predefined thresholds (alert/ok) 
+    to provide a quick visualization of instance health.
+    """
     assessments = []
     checks = [
         ("cpu_avg_pct",           metrics.get("cpu_avg_pct"),           "low",  5,   "CPU avg < 5% → underutilised"),
@@ -240,7 +240,12 @@ async def fetch_and_analyse(
     instance: dict,
     window_days: int,
 ) -> dict:
-    """Fetch metrics for one instance via /analyse-eval and return scored result."""
+    """
+    Orchestrates the data collection and analysis for a single instance.
+    1. Fetches real metrics for the given window.
+    2. Calls the /analyse-eval endpoint with real data.
+    3. Scores the LLM response against derived heuristics.
+    """
     # /analyse-eval accepts pre-built metrics OR we can use the dedicated
     # /analyse-eval-live endpoint. Since we don't have that, we call
     # /instances-metrics (a new lightweight endpoint we add below).
@@ -428,6 +433,10 @@ def print_instance_report(result: dict, idx: int, total: int):
 
 # ── HTML report generator ─────────────────────────────────────────
 def generate_html_report(results: list[dict], window_days: int) -> str:
+    """
+    Renders the collected analysis results into a premium, interactive
+    HTML report using a built-in Jinja-style template.
+    """
     run_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     rows_html = ""
 

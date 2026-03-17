@@ -1,15 +1,12 @@
 """
-╔══════════════════════════════════════════════════════════════════╗
-║         EC2 Analysis Agent — LLM Eval Runner                     ║
-║                                                                  ║
-║  Runs all scenarios from eval_scenarios.json against the         ║
-║  /analyse-eval endpoint and scores the LLM's responses.          ║
-║                                                                  ║
-║  Run:                                                            ║
-║      uv run python eval_runner.py                                ║
-║      uv run python eval_runner.py --scenario EVAL-001            ║
-║      uv run python eval_runner.py --output report.json           ║
-╚══════════════════════════════════════════════════════════════════╝
+EC2 Analysis Agent — LLM Eval Runner
+
+This module automates the evaluation of the LLM's reasoning and recommendation accuracy.
+It runs predefined test scenarios (from eval_scenarios.json) against the backend's
+evaluation endpoint and calculates scores based on:
+1. Rightsizing action correctness.
+2. Accuracy of cited metrics (Primary vs Secondary factors).
+3. Risk warning flag presence and severity.
 """
 
 import argparse
@@ -152,7 +149,11 @@ def score_rightsizing(
     llm_instance: dict,
     expected: dict,
 ) -> list[dict]:
-    """Score rightsizing recommendation for one instance."""
+    """
+    Scores the rightsizing recommendation for a single instance.
+    Checks if the action (Downsize, Terminate, etc.) and the recommended
+    instance type match the expected behavior.
+    """
     checks = []
     exp_rs = expected.get("rightsizing", {})
     if not exp_rs:
@@ -217,7 +218,11 @@ def score_risk_warnings(
     llm_instance: dict,
     expected: dict,
 ) -> list[dict]:
-    """Score risk warning flags for one instance."""
+    """
+    Scores the risk warning flags for a single instance.
+    Verifies that critical flags (like 'Disk Full') are present and
+    assigned the correct severity level.
+    """
     checks = []
     exp_rw = expected.get("risk_warnings", {})
     if not exp_rw:
@@ -369,7 +374,10 @@ async def run_scenario(
     client: httpx.AsyncClient,
     scenario: dict,
 ) -> dict:
-    """Call /analyse-eval for one scenario and return scored result."""
+    """
+    Executes a single evaluation scenario by calling the /analyse-eval endpoint.
+    Handles network errors and returns a scored result object.
+    """
     payload = {
         "scenario_id": scenario["id"],
         "metrics":     scenario["metrics"],

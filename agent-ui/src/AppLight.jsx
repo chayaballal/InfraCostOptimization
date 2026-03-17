@@ -806,7 +806,7 @@ export default function App() {
   const [selected, setSelected]         = useState([]);
   const [analysedInstanceIds, setAnalysedInstanceIds] = useState([]);
   const [win, setWin]                   = useState(30);
-  const [focus, setFocus]               = useState(["rightsizing", "risk_warnings", "full_report"]);
+  const [focus, setFocus]               = useState(["rightsizing", "risk_warnings", "full_report", "table"]);
   const [question, setQuestion]         = useState("");
   const [output, setOutput]             = useState("");
   const [streaming, setStreaming]       = useState(false);
@@ -1610,7 +1610,7 @@ export default function App() {
           </div>
           <div className="sbar-item">
             <span className="sbar-label">Focus</span>
-            <span className="sbar-value accent">{focus.length} / 3 selected</span>
+            <span className="sbar-value accent">{focus.length} / {focusOptions.length} selected</span>
           </div>
           <div className="sbar-item">
             <span className="sbar-label">Window</span>

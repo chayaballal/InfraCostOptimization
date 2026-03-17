@@ -302,86 +302,6 @@ function FleetDashboard({ windowDays }) {
   );
 }
 
-// ── Multi-Instance Compare Chart ─────────────────────────────────
-const COMPARE_COLORS = ["#2563eb", "#0891b2", "#16a34a", "#8b5cf6", "#d97706", "#ec4899"];
-function CompareChart({ instanceIds, windowDays, instances }) {
-  const [series, setSeries] = useState([]);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (!instanceIds || instanceIds.length < 2) { setSeries([]); return; }
-    setLoading(true);
-    fetch(`${API}/timeseries-compare?ids=${instanceIds.join(",")}&window_days=${windowDays}`)
-      .then(r => r.json())
-      .then(d => setSeries(d.series || []))
-      .catch(() => setSeries([]))
-      .finally(() => setLoading(false));
-  }, [instanceIds, windowDays]);
-
-  const getName = (id) => {
-    const inst = instances.find(i => i.instance_id === id);
-    return inst ? (inst.instance_name || id) : id;
-  };
-
-  if (!instanceIds || instanceIds.length < 2) {
-    return (
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 300, gap: 12, color: "var(--muted)" }}>
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-        </svg>
-        <div style={{ fontSize: 14, fontWeight: 500 }}>Select 2-6 instances to compare</div>
-        <div style={{ fontSize: 12 }}>Use the instance list on the left to select multiple instances, then switch to Compare view</div>
-      </div>
-    );
-  }
-  if (loading) return <div style={{ padding: 32, display: 'flex', gap: 12, flexDirection: 'column' }}><div className="skeleton" style={{height: 300}} /></div>;
-
-  return (
-    <div style={{ padding: "24px 32px", display: "flex", flexDirection: "column", gap: 28 }}>
-      <div>
-        <h3 style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 14 }}>
-          CPU Utilization Comparison — {windowDays}d
-        </h3>
-        <div style={{ background: "var(--canvas)", border: "1px solid var(--border)", borderRadius: 8, padding: "16px 8px" }}>
-          <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={series} margin={{ top: 0, right: 20, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e3de" />
-              <XAxis dataKey="date" tick={{ fontSize: 10 }} stroke="#a8a29e" />
-              <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} stroke="#a8a29e" unit="%" />
-              <RechartsTooltip contentStyle={{ fontSize: 12, borderRadius: 6, border: "1px solid #e5e3de", boxShadow: "0 4px 12px rgba(0,0,0,0.08)" }} />
-              <Legend wrapperStyle={{ fontSize: 12 }} />
-              {instanceIds.map((id, idx) => (
-                <Bar key={id} dataKey={`${id}_cpu`} name={getName(id)} fill={COMPARE_COLORS[idx % COMPARE_COLORS.length]} radius={[3, 3, 0, 0]} maxBarSize={20} />
-              ))}
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-      <div>
-        <h3 style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--muted)", marginBottom: 14 }}>
-          Memory Utilization Comparison — {windowDays}d
-        </h3>
-        <div style={{ background: "var(--canvas)", border: "1px solid var(--border)", borderRadius: 8, padding: "16px 8px" }}>
-          <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={series} margin={{ top: 0, right: 20, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e3de" />
-              <XAxis dataKey="date" tick={{ fontSize: 10 }} stroke="#a8a29e" />
-              <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} stroke="#a8a29e" unit="%" />
-              <RechartsTooltip contentStyle={{ fontSize: 12, borderRadius: 6, border: "1px solid #e5e3de", boxShadow: "0 4px 12px rgba(0,0,0,0.08)" }} />
-              <Legend wrapperStyle={{ fontSize: 12 }} />
-              {instanceIds.map((id, idx) => (
-                <Bar key={id} dataKey={`${id}_mem`} name={getName(id)} fill={COMPARE_COLORS[idx % COMPARE_COLORS.length]} radius={[3, 3, 0, 0]} maxBarSize={20} />
-              ))}
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-        {instanceIds.length < 2 && (
-          <div style={{ marginTop: 8, fontSize: 11, color: "var(--muted)", fontStyle: "italic" }}>Select at least 2 instances on the left to compare</div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 // ── Savings Board ─────────────────────────────────────────────────
 const STATUS_COLORS = {
@@ -894,7 +814,7 @@ export default function App() {
   const [error, setError]               = useState(null);
   const [loadingInst, setLoadingInst]   = useState(true);
   const [sidebarOpen, setSidebarOpen]   = useState(true);
-  const [activeView, setActiveView]     = useState("analysis"); // "analysis" | "compare" | "savings"
+  const [activeView, setActiveView]     = useState("analysis"); // "analysis" | "savings"
   const [costComparisons, setCostComparisons] = useState([]);
   const [isSaving, setIsSaving] = useState(false);
   const [recommendations, setRecommendations] = useState([]);
@@ -1821,7 +1741,6 @@ export default function App() {
             <div className="view-tabs">
               {[
                 { id: "analysis", label: "Analysis",    icon: "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" },
-                { id: "compare",  label: selected.length >= 2 ? `Compare (${selected.length})` : "Compare", icon: "M22 12 18 12 15 21 9 3 6 12 2 12" },
                 { id: "savings",         label: "Savings Board",    icon: "M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" },
                 { id: "recommendations", label: "Recommendations",  icon: "M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" },
               ].map(tab => (
@@ -1873,10 +1792,6 @@ export default function App() {
 
             {/* Output */}
             <div className="output-wrap">
-              {/* Compare view */}
-              {activeView === "compare" && (
-                <CompareChart instanceIds={selected} windowDays={win} instances={instances} />
-              )}
 
               {/* Savings Board view */}
               {activeView === "savings" && (

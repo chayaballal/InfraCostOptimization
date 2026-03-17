@@ -41,7 +41,7 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # Paths — all local
-BASE_DIR         = Path(__file__).parent.parent / "agent_backend" / "data"
+BASE_DIR         = Path(__file__).parent.parent.parent / "data"
 SUMMARY_FILE     = BASE_DIR / "summary_metrics.parquet"
 RECOMMENDATIONS_FILE = BASE_DIR / "recommendations.parquet"
 PRICING_FILE     = BASE_DIR / "pricing_cache.csv"
@@ -172,7 +172,7 @@ Required JSON structure:
       "recommended_type": "t3.medium",
       "rightsizing_action": "downsize",
       "rightsizing_reason": "one sentence with exact metric values",
-      "estimated_monthly_saving_usd": 12.50,
+      "estimated_monthly_saving_usd": 12.50, # Use NEGATIVE values if the recommended type costs MORE than current.
       "confidence": "high | medium | low",
       "risk_flags": [
         {
@@ -302,6 +302,16 @@ def save_recommendations(llm_result: dict, candidates_df: pd.DataFrame) -> pd.Da
     # Build a lookup for candidate metadata
     meta = candidates_df.set_index("instance_id").to_dict("index")
 
+    # Load pricing lookup for validation
+    prices = {}
+    if PRICING_FILE.exists():
+        try:
+            pdf = pd.read_csv(PRICING_FILE)
+            for _, r in pdf.iterrows():
+                prices[r["instance_type"]] = float(r["hourly_usd"])
+        except Exception as e:
+            log.warning(f"Could not load pricing for validation: {e}")
+
     for inst in llm_result.get("instances", []):
         iid = inst.get("instance_id", "")
         m = meta.get(iid, {})
@@ -309,7 +319,7 @@ def save_recommendations(llm_result: dict, candidates_df: pd.DataFrame) -> pd.Da
         # Flatten risk flags into a JSON string
         risk_flags_str = json.dumps(inst.get("risk_flags", []))
 
-        rows.append({
+        row = {
             "instance_id":                 iid,
             "instance_name":               inst.get("instance_name", m.get("instance_name")),
             "current_type":                inst.get("current_type", m.get("instance_type")),
@@ -327,7 +337,32 @@ def save_recommendations(llm_result: dict, candidates_df: pd.DataFrame) -> pd.Da
             "sample_days":                 m.get("sample_days"),
             "status":                      "Proposed",
             "analysed_at":                 now,
-        })
+        }
+
+        # --- PRICE VALIDATION OVERRIDE ---
+        ctype = row["current_type"]
+        rtype = row["recommended_type"]
+        action = (row["rightsizing_action"] or "").lower()
+
+        c_hr = prices.get(ctype)
+        r_hr = prices.get(rtype) if rtype and rtype != ctype else None
+        
+        # If terminate, recommended price is 0
+        if action == "terminate":
+            r_hr = 0.0
+        
+        if c_hr is not None and r_hr is not None:
+            # Recalculate saving to ensure accuracy
+            calc_saving = round((c_hr - r_hr) * 730, 2)
+            # If agent provided 0 but it's clearly a cost or saving, override
+            if (row["estimated_monthly_saving_usd"] == 0 or row["estimated_monthly_saving_usd"] is None) and calc_saving != 0:
+                row["estimated_monthly_saving_usd"] = calc_saving
+            # If agent provided a value but it's wildly different (>10% or >$10), override
+            elif row["estimated_monthly_saving_usd"] is not None:
+                if abs(row["estimated_monthly_saving_usd"] - calc_saving) > max(10, abs(calc_saving) * 0.1):
+                    row["estimated_monthly_saving_usd"] = calc_saving
+
+        rows.append(row)
 
     # Add LLM summary as a separate attribute on the DataFrame
     df = pd.DataFrame(rows)
@@ -430,7 +465,25 @@ async def main():
         log.info(f"Applying custom user prompt: {custom_prompt[:50]}...")
 
     if candidates_df.empty:
-        log.info("No candidates found — all instances appear healthy. Exiting.")
+        log.info("No candidates found — all instances appear healthy. Saving empty recommendations.")
+        # Create a mock result for a healthy fleet
+        llm_result = {
+            "instances": [],
+            "summary": {
+                "total_instances": len(all_df),
+                "instances_to_downsize": 0,
+                "instances_to_upsize": 0,
+                "instances_to_change_family": 0,
+                "instances_to_terminate": 0,
+                "instances_healthy": len(all_df),
+                "instances_insufficient_data": 0,
+                "total_estimated_saving_usd": 0.0,
+                "critical_risks": 0
+            },
+            "narrative": "The entire fleet appears healthy and within optimal utilization ranges based on current metrics. No rightsizing actions required."
+        }
+        rec_df = save_recommendations(llm_result, candidates_df)
+        print_summary(llm_result, rec_df)
         return
 
     # 3. Build prompts

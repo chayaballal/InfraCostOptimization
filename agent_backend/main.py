@@ -43,14 +43,12 @@ from typing import Optional
 
 import pandas as pd
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
-from sqlalchemy import text
 
-from agent_backend.data.database import Database
 from agent_backend.cache import AnalysisCache
 # from agent_backend.agents.analysis.analysis_agent import LLMService, PromptBuilder
 from agent_backend.agents.orchestrator.savings import SavingsTracker
@@ -108,14 +106,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DB_URL = (
-    f"postgresql+asyncpg://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}"
-    f"@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT', 5433)}/{os.getenv('DB_NAME')}"
-)
-
-db = Database(DB_URL)
-cache = AnalysisCache(db)
-savings = SavingsTracker(db)
+# Local storage initialization
+cache = AnalysisCache()
+savings = SavingsTracker()
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -184,9 +177,8 @@ class CompareCostByInstanceRequest(BaseModel):
 # ──────────────────────────────────────────────────────────────────
 @app.on_event("startup")
 async def startup_event():
-    # PostgreSQL is being deprecated in favour of local/S3 Parquet
     log.info("Starting up in Local Data Mode (Parquet-based)")
-
+    # No database setup needed
     asyncio.create_task(cache.start_cleanup_loop())
 
 
@@ -305,19 +297,17 @@ async def auto_select(req: AutoSelectRequest):
 
 @app.get("/timeseries")
 async def get_timeseries(instance_id: str, window_days: int = 30):
-    """Returns historical daily metric points for a specific instance."""
-    rows = await db.fetch_timeseries(instance_id, window_days)
-    return {"instance_id": instance_id, "timeseries": rows}
+    """Returns local historical daily metrics (currently empty)."""
+    return {"instance_id": instance_id, "timeseries": []}
 
 
 @app.get("/instance-metrics")
 async def instance_metrics(instance_id: str, window_days: int = 30):
-    """Returns aggregated metrics for a single instance within a time window."""
-    try:
-        rows = await db.fetch_metrics(window_days, [instance_id])
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {e}")
-    return {"instance_id": instance_id, "window_days": window_days, "metrics": rows}
+    """Returns local aggregated metrics for a single instance."""
+    df = load_local_metrics()
+    if df.empty: return {"instance_id": instance_id, "metrics": []}
+    match = df[df["instance_id"] == instance_id]
+    return {"instance_id": instance_id, "window_days": window_days, "metrics": match.to_dict(orient="records")}
 
 
 @app.get("/pricing")
@@ -370,60 +360,6 @@ async def compare_pricing_endpoint(req: CompareCostRequest):
     return result
 
 
-async def _get_current_instance_type(instance_id: str) -> Optional[str]:
-    """
-    Resolve current instance_type for an instance_id from available sources.
-    Tries summary-all (demo + real), then summary, then raw metrics table.
-    """
-    async with db.session_factory() as session:
-        sources = [
-            (
-                "v_ec2_llm_summary",
-                """
-                SELECT instance_type
-                FROM v_ec2_llm_summary
-                WHERE instance_id = :iid
-                  AND instance_type IS NOT NULL
-                  AND instance_type <> ''
-                ORDER BY sample_days DESC NULLS LAST, window_days DESC
-                LIMIT 1
-                """,
-            ),
-            (
-                "v_ec2_llm_summary",
-                """
-                SELECT instance_type
-                FROM v_ec2_llm_summary
-                WHERE instance_id = :iid
-                  AND instance_type IS NOT NULL
-                  AND instance_type <> ''
-                ORDER BY sample_days DESC NULLS LAST, window_days DESC
-                LIMIT 1
-                """,
-            ),
-            (
-                "ec2_metrics_latest",
-                """
-                SELECT instance_type
-                FROM ec2_metrics_latest
-                WHERE instance_id = :iid
-                  AND instance_type IS NOT NULL
-                  AND instance_type <> ''
-                ORDER BY day_bucket DESC
-                LIMIT 1
-                """,
-            ),
-        ]
-
-        for source_name, sql_str in sources:
-            try:
-                value = await session.scalar(text(sql_str), {"iid": instance_id})
-                if value:
-                    return value
-            except Exception as e:
-                log.debug(f"Current type lookup skipped for {source_name}: {e}")
-
-        return None
 
 
 def _extract_instance_type(raw: str) -> Optional[str]:
@@ -624,12 +560,8 @@ async def timeseries_compare(ids: str, window_days: int = 30):
             status_code=400, detail="Maximum 6 instances allowed for comparison."
         )
 
-    # Mocked timeseries comparison (returns empty if no DB)
+    # Timeseries comparison (currently returns empty in local mode)
     rows = []
-    try:
-        rows = await db.fetch_timeseries_compare(instance_ids, window_days)
-    except Exception:
-        log.warning("Timeseries comparison failed (database likely unavailable).")
 
     pivoted: dict[str, dict] = {}
     for r in rows:
@@ -649,7 +581,7 @@ async def timeseries_compare(ids: str, window_days: int = 30):
     }
 
 
-async def _run_script_and_stream(instance_ids: list[str] = None, question: str = None):
+async def _run_script_and_stream(instance_ids: Optional[list[str]] = None, question: Optional[str] = None):
     """Internal helper to execute the recommendation script and stream its logs."""
     import sys
     script_path = Path(__file__).parent / "agents" / "analysis" / "recommendation_agent.py"
@@ -674,7 +606,7 @@ async def _run_script_and_stream(instance_ids: list[str] = None, question: str =
                 stderr=aio_sp.STDOUT,
             )
             
-            if process and process.stdout:
+            if process.stdout:
                 while True:
                     line = await process.stdout.readline()
                     if not line:
@@ -755,7 +687,7 @@ async def get_recommendations():
     """
     rec_file = Path(__file__).parent / "data" / "recommendations.parquet"
     if not rec_file.exists():
-        return {"recommendations": [], "summary": {}, "error": "recommendations.parquet not found. Run: python scripts/recommendation_agent.py"}
+        return {"recommendations": [], "summary": {}}
 
     try:
         df = pd.read_parquet(rec_file)

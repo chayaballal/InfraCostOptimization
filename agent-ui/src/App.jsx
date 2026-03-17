@@ -1,9 +1,283 @@
+/**
+ * EC2 Fleet Analysis Agent — Frontend implementation.
+ *
+ * Tabs:
+ *  1. Analysis  — LLM streaming analysis (existing)
+ *  2. Recommendations — reads local recommendations.parquet via /recommendations
+ */
 import { useState, useRef, useEffect, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer } from "recharts";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
+
+// ── Action badge colours ──────────────────────────────────────────
+const ACTION_STYLE = {
+  terminate:         { bg: "rgba(255,68,68,0.15)",    border: "#ff4444", color: "#ff4444",  label: "TERMINATE"   },
+  downsize:          { bg: "rgba(255,184,0,0.13)",    border: "#ffb800", color: "#ffb800",  label: "DOWNSIZE"    },
+  upsize:            { bg: "rgba(0,255,136,0.12)",    border: "#00ff88", color: "#00ff88",  label: "UPSIZE"      },
+  change_family:     { bg: "rgba(168,85,247,0.14)",   border: "#a855f7", color: "#a855f7",  label: "CHG FAMILY"  },
+  keep:              { bg: "rgba(0,212,255,0.08)",    border: "#00d4ff", color: "#00d4ff",  label: "KEEP"        },
+  insufficient_data: { bg: "rgba(74,85,104,0.2)",     border: "#4a5568", color: "#4a5568",  label: "INSUF. DATA" },
+};
+
+const FLAG_COLOUR = {
+  zombie:           "#ff4444",
+  cpu_high:         "#ffb800",
+  memory_pressure:  "#a855f7",
+  low_sample_days:  "#4a5568",
+};
+
+function ActionBadge({ action }) {
+  const s = ACTION_STYLE[action] || ACTION_STYLE.keep;
+  return (
+    <span style={{
+      display: "inline-block", padding: "2px 8px", borderRadius: 3,
+      border: `1px solid ${s.border}`, background: s.bg,
+      color: s.color, fontFamily: "var(--mono)", fontSize: 10, fontWeight: 600,
+      letterSpacing: "0.08em", whiteSpace: "nowrap",
+    }}>
+      {s.label}
+    </span>
+  );
+}
+
+function RiskChip({ flag, severity }) {
+  const col = FLAG_COLOUR[flag] || "#4a5568";
+  return (
+    <span title={severity} style={{
+      display: "inline-block", padding: "1px 6px", borderRadius: 3, marginRight: 4, marginBottom: 2,
+      border: `1px solid ${col}`, background: `${col}18`,
+      color: col, fontFamily: "var(--mono)", fontSize: 9, fontWeight: 600,
+      letterSpacing: "0.06em", whiteSpace: "nowrap",
+    }}>
+      {flag.replace(/_/g, " ")}
+    </span>
+  );
+}
+
+function ConfidenceDot({ confidence }) {
+  const colours = { high: "#00ff88", medium: "#ffb800", low: "#ff4444" };
+  const col = colours[confidence] || "#4a5568";
+  return (
+    <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+      <span style={{ width: 7, height: 7, borderRadius: "50%", background: col, flexShrink: 0,
+        boxShadow: `0 0 5px ${col}` }} />
+      <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: col }}>{confidence}</span>
+    </span>
+  );
+}
+
+// ── Recommendations Panel ─────────────────────────────────────────
+function RecommendationsPanel() {
+  const [data, setData]       = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState(null);
+  const [filter, setFilter]   = useState("all");
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    fetch(`${API}/recommendations`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.error) setError(d.error);
+        setData(d);
+      })
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (loading) return (
+    <div style={{ padding: 36, display: "flex", flexDirection: "column", gap: 14 }}>
+      {[1,2,3,4,5].map(i => (
+        <div key={i} className="skeleton" style={{ height: 52, borderRadius: 6 }} />
+      ))}
+    </div>
+  );
+
+  if (error) return (
+    <div style={{ padding: 36 }}>
+      <div className="error-box" style={{ marginBottom: 16 }}>{error}</div>
+      <button className="btn btn-primary" onClick={load}>Retry</button>
+    </div>
+  );
+
+  if (!data) return null;
+
+  const recs = data.recommendations || [];
+  const summary = data.summary || {};
+  const actions = summary.action_counts || {};
+
+  // Filter tabs
+  const filterOptions = [
+    { id: "all",               label: `All (${recs.length})` },
+    { id: "terminate",         label: `Terminate (${actions.terminate || 0})` },
+    { id: "downsize",          label: `Downsize (${actions.downsize || 0})` },
+    { id: "upsize",            label: `Upsize (${actions.upsize || 0})` },
+    { id: "change_family",     label: `Chg Family (${actions.change_family || 0})` },
+    { id: "keep",              label: `Keep (${actions.keep || 0})` },
+    { id: "insufficient_data", label: `Insuf. Data (${actions.insufficient_data || 0})` },
+  ];
+
+  const filtered = filter === "all" ? recs : recs.filter(r => r.rightsizing_action === filter);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+
+      {/* Summary bar */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 24, flexWrap: "wrap",
+        padding: "14px 28px", borderBottom: "1px solid var(--border)",
+        background: "var(--surface)", flexShrink: 0,
+      }}>
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--muted)", letterSpacing: "0.12em", textTransform: "uppercase" }}>Est. Monthly Saving</span>
+          <span style={{ fontFamily: "var(--mono)", fontSize: 22, fontWeight: 700, color: "#00ff88" }}>
+            ${(summary.total_estimated_saving_usd || 0).toFixed(2)}
+          </span>
+        </div>
+
+        <div style={{ width: 1, height: 36, background: "var(--border2)" }} />
+
+        {Object.entries(ACTION_STYLE).map(([key, s]) => {
+          const cnt = actions[key] || 0;
+          if (!cnt) return null;
+          return (
+            <div key={key} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 18, fontWeight: 700, color: s.color }}>{cnt}</span>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--muted)", letterSpacing: "0.1em" }}>{s.label}</span>
+            </div>
+          );
+        })}
+
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+          <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--muted)" }}>
+            {summary.total_candidates} candidates analysed
+          </span>
+          <button
+            className="btn btn-clear"
+            style={{ padding: "6px 14px", fontSize: 11 }}
+            onClick={load}
+          >
+            ↻ REFRESH
+          </button>
+        </div>
+      </div>
+
+      {/* Filter pills */}
+      <div style={{
+        display: "flex", gap: 6, padding: "10px 28px",
+        borderBottom: "1px solid var(--border)", flexShrink: 0, flexWrap: "wrap",
+      }}>
+        {filterOptions.map(f => (
+          <button
+            key={f.id}
+            onClick={() => setFilter(f.id)}
+            style={{
+              padding: "4px 12px", borderRadius: 4, border: "1px solid",
+              borderColor: filter === f.id ? "var(--accent)" : "var(--border2)",
+              background: filter === f.id ? "rgba(0,212,255,0.08)" : "transparent",
+              color: filter === f.id ? "var(--accent)" : "var(--muted)",
+              fontFamily: "var(--mono)", fontSize: 11, cursor: "pointer", transition: "all 0.15s",
+            }}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Table */}
+      <div style={{ flex: 1, overflowY: "auto", padding: "0 28px 28px" }}>
+        {filtered.length === 0 ? (
+          <div style={{ padding: 48, textAlign: "center", color: "var(--muted)", fontFamily: "var(--mono)", fontSize: 13 }}>
+            No recommendations in this category.
+          </div>
+        ) : (
+          <table style={{
+            width: "100%", borderCollapse: "collapse", marginTop: 16,
+            fontFamily: "var(--mono)", fontSize: 12,
+          }}>
+            <thead>
+              <tr style={{ background: "#0d1017" }}>
+                {["Instance", "Name", "Current Type", "Recommended", "Action", "Reason", "Saving / mo", "Confidence", "Risk Flags"].map(h => (
+                  <th key={h} style={{
+                    padding: "10px 14px", textAlign: "left", fontSize: 10, fontWeight: 600,
+                    color: "var(--muted)", letterSpacing: "0.1em", textTransform: "uppercase",
+                    borderBottom: "1px solid var(--border2)", whiteSpace: "nowrap",
+                    position: "sticky", top: 0, background: "#0d1017", zIndex: 1,
+                  }}>
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((r, idx) => {
+                let flags = [];
+                try { flags = r.risk_flags ? JSON.parse(r.risk_flags) : []; } catch {}
+                const saving = r.estimated_monthly_saving_usd;
+                const savingStr = saving != null && saving !== 0
+                  ? `$${parseFloat(saving).toFixed(2)}`
+                  : "—";
+                const savingCol = saving > 0 ? "#00ff88" : saving < 0 ? "#ff4444" : "var(--muted)";
+
+                return (
+                  <tr key={idx} style={{
+                    borderBottom: "1px solid var(--border)",
+                    transition: "background 0.1s",
+                  }}
+                    onMouseEnter={e => e.currentTarget.style.background = "rgba(0,212,255,0.025)"}
+                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                  >
+                    <td style={{ padding: "10px 14px", color: "var(--accent)", whiteSpace: "nowrap" }}>
+                      {r.instance_id}
+                    </td>
+                    <td style={{ padding: "10px 14px", color: "var(--text)", whiteSpace: "nowrap" }}>
+                      {r.instance_name || "—"}
+                    </td>
+                    <td style={{ padding: "10px 14px", color: "var(--text)", whiteSpace: "nowrap" }}>
+                      {r.current_type || "—"}
+                    </td>
+                    <td style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>
+                      {r.recommended_type
+                        ? <span style={{ color: "#e8edf4", fontWeight: 600 }}>{r.recommended_type}</span>
+                        : <span style={{ color: "var(--muted)" }}>—</span>
+                      }
+                    </td>
+                    <td style={{ padding: "10px 14px", whiteSpace: "nowrap" }}>
+                      <ActionBadge action={r.rightsizing_action} />
+                    </td>
+                    <td style={{ padding: "10px 14px", color: "var(--muted)", maxWidth: 280, lineHeight: 1.5 }}>
+                      {r.rightsizing_reason || "—"}
+                    </td>
+                    <td style={{ padding: "10px 14px", color: savingCol, fontWeight: 600, whiteSpace: "nowrap" }}>
+                      {savingStr}
+                    </td>
+                    <td style={{ padding: "10px 14px" }}>
+                      <ConfidenceDot confidence={r.confidence} />
+                    </td>
+                    <td style={{ padding: "10px 14px", minWidth: 140 }}>
+                      {flags.length === 0
+                        ? <span style={{ color: "var(--muted)", fontSize: 11 }}>—</span>
+                        : flags.map((f, fi) => (
+                            <RiskChip key={fi} flag={f.flag} severity={f.severity} />
+                          ))
+                      }
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // Each markdown element maps to a styled React component.
 // This replaces the old fragile regex-based renderer entirely.
@@ -37,6 +311,9 @@ const MD_COMPONENTS = {
   td:    ({ children }) => <td className="md-td">{children}</td>,
 };
 
+/**
+ * Simple card representing an individual EC2 instance in the selector list.
+ */
 function InstanceCard({ inst, selected, onClick }) {
   return (
     <button
@@ -51,6 +328,10 @@ function InstanceCard({ inst, selected, onClick }) {
 }
 
 
+/**
+ * Dynamic chart component that fetches and renders time-series metrics
+ * for a specific instance using Recharts.
+ */
 function TimeSeriesChart({ instanceId, windowDays }) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -94,6 +375,10 @@ function TimeSeriesChart({ instanceId, windowDays }) {
   );
 }
 
+/**
+ * Main application container managing state for instance selection,
+ * analysis configuration, and LLM streaming responses.
+ */
 export default function App() {
   const [instances, setInstances]     = useState([]);
   const [selected, setSelected]       = useState([]);
@@ -133,28 +418,50 @@ export default function App() {
     setError(null);
     setStatus("loading");
     setStreaming(true);
+    setCostComparisons([]);
     abortRef.current = new AbortController();
 
+    let finalIds = selected;
+
+    if (finalIds.length === 0) {
+      try {
+        const autoRes = await fetch(`${API}/auto-select`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: abortRef.current.signal,
+          body: JSON.stringify({ window_days: win, prompt: question || null }),
+        });
+        if (!autoRes.ok) throw new Error("Auto-select failed");
+        const autoData = await autoRes.json();
+        finalIds = autoData.instance_ids;
+        setSelected(finalIds);
+      } catch (e) {
+        setError("Auto-select failed: " + e.message);
+        setStatus("error");
+        setStreaming(false);
+        return;
+      }
+    }
+
+    const useAgent = focus.includes("table");
+    const endpoint = useAgent ? `${API}/run-recommendation-agent` : `${API}/analyse`;
+
     try {
-      const res = await fetch(`${API}/analyse`, {
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: abortRef.current.signal,
         body: JSON.stringify({
-          window_days:  win,
-          instance_ids: selected,
-          question:     question || null,
-          focus,
+          window_days: win,
+          instance_ids: finalIds,
+          question: question || null,
+          focus: focus.filter(f => f !== "table")
         }),
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || "Backend error");
-      }
-
+      if (!res.ok) throw new Error("Backend error");
       setStatus("streaming");
-      const reader  = res.body.getReader();
+      const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
 
@@ -164,6 +471,7 @@ export default function App() {
         buf += decoder.decode(value, { stream: true });
         const lines = buf.split("\n");
         buf = lines.pop();
+
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
           const data = line.slice(6).trim();
@@ -175,18 +483,18 @@ export default function App() {
         }
       }
       setStatus("done");
+      if (useAgent) {
+        setActiveView("recommendations");
+      }
     } catch (e) {
       if (e.name !== "AbortError") {
         setError(e.message);
         setStatus("error");
-      } else {
-        setStatus("idle");
       }
     } finally {
       setStreaming(false);
     }
   }, [win, selected, question, focus]);
-
   const handleStop = () => {
     abortRef.current?.abort();
     setStreaming(false);
@@ -194,9 +502,10 @@ export default function App() {
   };
 
   const focusOptions = [
-    { id: "rightsizing",   label: "Rightsizing",   symbol: "=" },
-    { id: "risk_warnings", label: "Risk Warnings", symbol: "!" },
-    { id: "full_report",   label: "Full Report",   symbol: "#" },
+    { id: "rightsizing", label: "Rightsizing", symbol: "🎯" },
+    { id: "risk_warnings", label: "Risks & Flags", symbol: "⚠️" },
+    { id: "full_report", label: "Full Report", symbol: "📄" },
+    { id: "table", label: "Recommendation Table", symbol: "📊" },
   ];
 
   const windowOptions = [10, 30, 60, 90];

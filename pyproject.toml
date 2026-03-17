@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "asyncpg>=0.31.0",
+    "awslabs-aws-pricing-mcp-server>=1.0.26",
     "boto3>=1.42.56",
     "fastapi>=0.135.0",
     "groq>=1.0.0",

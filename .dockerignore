@@ -1,31 +1,8 @@
-# Python
-__pycache__/
+.venv
+.git
+.env
+__pycache__
 *.pyc
-*.pyo
-.venv/
-.python-version
-*.egg-info/
-
-# Node / frontend dev artifacts
-agent-ui/node_modules/
-agent-ui/dist/
-
-# Local env (secrets — will be passed explicitly via docker-compose env_file)
-.env.testing
-
-# Git
-.git/
-.gitignore
-
-# Editor / OS
-.vscode/
-*.DS_Store
-*.swp
-
-# Test artifacts
-.pytest_cache/
-*.parquet
-ec2_metrics_*.parquet
-
-# Logs
-*.log
+agent-ui/node_modules
+agent-ui/dist
+.vscode

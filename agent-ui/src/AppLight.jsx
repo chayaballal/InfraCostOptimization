@@ -1629,10 +1629,7 @@ export default function App() {
             </div>
           )}
           <div className="sbar-spacer" />
-          <div className="sbar-item" style={{ borderRight: "none", borderLeft: "1px solid var(--border)" }}>
-            <span className="sbar-label">Provider</span>
-            <span className="sbar-value">Groq Cloud</span>
-          </div>
+          
         </div>
 
         {/* ── Body row ── */}

@@ -15,3 +15,7 @@ wheels/
 # Data files
 *.parquet
 *.csv
+agent-ui/release/
+*.AppImage
+*.snap
+*-unpacked/

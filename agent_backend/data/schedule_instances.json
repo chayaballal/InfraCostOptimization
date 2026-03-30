@@ -1,0 +1,594 @@
+[
+  {
+    "instance_id": "i-0408ca0508e3ccf50",
+    "instance_name": "Auto-CAT-2 Server",
+    "current_type": "m5.2xlarge",
+    "region": "us-east-1",
+    "category": "CAT-2",
+    "category_label": "Day-Patterned",
+    "schedule_type": "day_of_week",
+    "metrics": {
+      "active_days_per_week": 5,
+      "cpu_cov": 1.09,
+      "peak_to_avg_ratio": 3.21,
+      "trend_slope_pct_per_week": 0.12,
+      "overall_cpu_avg": 22.4,
+      "overall_cpu_max": 72.0
+    },
+    "day_of_week_profile": {
+      "Monday": {
+        "cpu_avg": 30.4,
+        "cpu_max": 72.0,
+        "active": true
+      },
+      "Tuesday": {
+        "cpu_avg": 30.4,
+        "cpu_max": 71.9,
+        "active": true
+      },
+      "Wednesday": {
+        "cpu_avg": 30.1,
+        "cpu_max": 71.9,
+        "active": true
+      },
+      "Thursday": {
+        "cpu_avg": 30.7,
+        "cpu_max": 72.0,
+        "active": true
+      },
+      "Friday": {
+        "cpu_avg": 30.3,
+        "cpu_max": 72.0,
+        "active": true
+      },
+      "Saturday": {
+        "cpu_avg": 6.4,
+        "cpu_max": 10.0,
+        "active": false
+      },
+      "Sunday": {
+        "cpu_avg": 6.5,
+        "cpu_max": 10.0,
+        "active": false
+      }
+    },
+    "job_windows": [],
+    "p95_scale_down_times": {}
+  },
+  {
+    "instance_id": "i-0ab123cd456ef789a",
+    "instance_name": "Auto-CAT-3 Server",
+    "current_type": "m5.xlarge",
+    "region": "us-east-1",
+    "category": "CAT-3",
+    "category_label": "Periodic Burst",
+    "schedule_type": "time_slot",
+    "metrics": {
+      "active_days_per_week": 2,
+      "cpu_cov": 1.8,
+      "peak_to_avg_ratio": 8.8,
+      "trend_slope_pct_per_week": -0.3,
+      "overall_cpu_avg": 10.0,
+      "overall_cpu_max": 88.0
+    },
+    "day_of_week_profile": {
+      "Monday": {
+        "cpu_avg": 25.1,
+        "cpu_max": 88.0,
+        "active": true
+      },
+      "Tuesday": {
+        "cpu_avg": 4.5,
+        "cpu_max": 8.0,
+        "active": false
+      },
+      "Wednesday": {
+        "cpu_avg": 4.4,
+        "cpu_max": 8.0,
+        "active": false
+      },
+      "Thursday": {
+        "cpu_avg": 25.0,
+        "cpu_max": 87.9,
+        "active": true
+      },
+      "Friday": {
+        "cpu_avg": 4.6,
+        "cpu_max": 8.0,
+        "active": false
+      },
+      "Saturday": {
+        "cpu_avg": 4.6,
+        "cpu_max": 8.0,
+        "active": false
+      },
+      "Sunday": {
+        "cpu_avg": 4.5,
+        "cpu_max": 8.0,
+        "active": false
+      }
+    },
+    "job_windows": [
+      {
+        "day": "Monday",
+        "start_time": "09:00",
+        "end_time": "17:00",
+        "crosses_midnight": false
+      },
+      {
+        "day": "Thursday",
+        "start_time": "09:00",
+        "end_time": "17:00",
+        "crosses_midnight": false
+      }
+    ],
+    "p95_scale_down_times": {
+      "Monday": "17:30",
+      "Thursday": "17:30"
+    }
+  },
+  {
+    "instance_id": "i-0d7S82131fb7175c2",
+    "instance_name": "Auto-CAT-1 Server",
+    "current_type": "m5.large",
+    "region": "us-east-1",
+    "category": "CAT-1",
+    "category_label": "Stable",
+    "schedule_type": "single",
+    "metrics": {
+      "active_days_per_week": 7,
+      "cpu_cov": 0.07,
+      "peak_to_avg_ratio": 1.13,
+      "trend_slope_pct_per_week": -0.02,
+      "overall_cpu_avg": 32.0,
+      "overall_cpu_max": 36.0
+    },
+    "day_of_week_profile": {
+      "Monday": {
+        "cpu_avg": 31.9,
+        "cpu_max": 36.0,
+        "active": true
+      },
+      "Tuesday": {
+        "cpu_avg": 32.0,
+        "cpu_max": 36.0,
+        "active": true
+      },
+      "Wednesday": {
+        "cpu_avg": 31.9,
+        "cpu_max": 36.0,
+        "active": true
+      },
+      "Thursday": {
+        "cpu_avg": 32.0,
+        "cpu_max": 36.0,
+        "active": true
+      },
+      "Friday": {
+        "cpu_avg": 31.9,
+        "cpu_max": 36.0,
+        "active": true
+      },
+      "Saturday": {
+        "cpu_avg": 32.0,
+        "cpu_max": 36.0,
+        "active": true
+      },
+      "Sunday": {
+        "cpu_avg": 32.0,
+        "cpu_max": 36.0,
+        "active": true
+      }
+    },
+    "job_windows": [],
+    "p95_scale_down_times": {}
+  },
+  {
+    "instance_id": "i-1bc234de567fg890b",
+    "instance_name": "Auto-CAT-4 Server",
+    "current_type": "m5.large",
+    "region": "us-east-1",
+    "category": "CAT-4",
+    "category_label": "Unpredictable Spiky",
+    "schedule_type": "autoscaling",
+    "metrics": {
+      "active_days_per_week": 7,
+      "cpu_cov": 1.59,
+      "peak_to_avg_ratio": 11.58,
+      "trend_slope_pct_per_week": -0.06,
+      "overall_cpu_avg": 8.4,
+      "overall_cpu_max": 96.9
+    },
+    "day_of_week_profile": {
+      "Monday": {
+        "cpu_avg": 8.6,
+        "cpu_max": 96.3,
+        "active": true
+      },
+      "Tuesday": {
+        "cpu_avg": 8.0,
+        "cpu_max": 96.7,
+        "active": true
+      },
+      "Wednesday": {
+        "cpu_avg": 7.6,
+        "cpu_max": 96.6,
+        "active": true
+      },
+      "Thursday": {
+        "cpu_avg": 8.3,
+        "cpu_max": 96.6,
+        "active": true
+      },
+      "Friday": {
+        "cpu_avg": 8.6,
+        "cpu_max": 96.9,
+        "active": true
+      },
+      "Saturday": {
+        "cpu_avg": 8.7,
+        "cpu_max": 96.8,
+        "active": true
+      },
+      "Sunday": {
+        "cpu_avg": 8.6,
+        "cpu_max": 96.8,
+        "active": true
+      }
+    },
+    "job_windows": [],
+    "p95_scale_down_times": {}
+  },
+  {
+    "instance_id": "i-2cd345ef678gh901c",
+    "instance_name": "Auto-CAT-5 Server",
+    "current_type": "t3.medium",
+    "region": "us-east-1",
+    "category": "CAT-5",
+    "category_label": "Zombie",
+    "schedule_type": "terminate",
+    "metrics": {
+      "active_days_per_week": 0,
+      "cpu_cov": 0.51,
+      "peak_to_avg_ratio": 1.87,
+      "trend_slope_pct_per_week": 0.0,
+      "overall_cpu_avg": 0.4,
+      "overall_cpu_max": 0.8
+    },
+    "day_of_week_profile": {
+      "Monday": {
+        "cpu_avg": 0.4,
+        "cpu_max": 0.8,
+        "active": false
+      },
+      "Tuesday": {
+        "cpu_avg": 0.4,
+        "cpu_max": 0.8,
+        "active": false
+      },
+      "Wednesday": {
+        "cpu_avg": 0.4,
+        "cpu_max": 0.8,
+        "active": false
+      },
+      "Thursday": {
+        "cpu_avg": 0.4,
+        "cpu_max": 0.8,
+        "active": false
+      },
+      "Friday": {
+        "cpu_avg": 0.4,
+        "cpu_max": 0.8,
+        "active": false
+      },
+      "Saturday": {
+        "cpu_avg": 0.4,
+        "cpu_max": 0.8,
+        "active": false
+      },
+      "Sunday": {
+        "cpu_avg": 0.4,
+        "cpu_max": 0.8,
+        "active": false
+      }
+    },
+    "job_windows": [],
+    "p95_scale_down_times": {}
+  },
+  {
+    "instance_id": "i-3de456fg789hi012d",
+    "instance_name": "Auto-CAT-6 Server",
+    "current_type": "c5.xlarge",
+    "region": "us-east-1",
+    "category": "CAT-6",
+    "category_label": "Trending",
+    "schedule_type": "single",
+    "metrics": {
+      "active_days_per_week": 7,
+      "cpu_cov": 0.24,
+      "peak_to_avg_ratio": 1.47,
+      "trend_slope_pct_per_week": 4.66,
+      "overall_cpu_avg": 25.0,
+      "overall_cpu_max": 36.9
+    },
+    "day_of_week_profile": {
+      "Monday": {
+        "cpu_avg": 23.7,
+        "cpu_max": 32.9,
+        "active": true
+      },
+      "Tuesday": {
+        "cpu_avg": 24.4,
+        "cpu_max": 33.6,
+        "active": true
+      },
+      "Wednesday": {
+        "cpu_avg": 25.0,
+        "cpu_max": 34.3,
+        "active": true
+      },
+      "Thursday": {
+        "cpu_avg": 25.7,
+        "cpu_max": 34.8,
+        "active": true
+      },
+      "Friday": {
+        "cpu_avg": 26.3,
+        "cpu_max": 35.5,
+        "active": true
+      },
+      "Saturday": {
+        "cpu_avg": 24.6,
+        "cpu_max": 36.3,
+        "active": true
+      },
+      "Sunday": {
+        "cpu_avg": 25.3,
+        "cpu_max": 36.9,
+        "active": true
+      }
+    },
+    "job_windows": [],
+    "p95_scale_down_times": {}
+  },
+  {
+    "instance_id": "i-4ef567gh890ij123e",
+    "instance_name": "Auto-CAT-1 Server",
+    "current_type": "m5.large",
+    "region": "us-east-1",
+    "category": "CAT-1",
+    "category_label": "Stable",
+    "schedule_type": "single",
+    "metrics": {
+      "active_days_per_week": 7,
+      "cpu_cov": 0.07,
+      "peak_to_avg_ratio": 1.12,
+      "trend_slope_pct_per_week": -0.02,
+      "overall_cpu_avg": 32.1,
+      "overall_cpu_max": 36.0
+    },
+    "day_of_week_profile": {
+      "Monday": {
+        "cpu_avg": 32.1,
+        "cpu_max": 36.0,
+        "active": true
+      },
+      "Tuesday": {
+        "cpu_avg": 32.1,
+        "cpu_max": 36.0,
+        "active": true
+      },
+      "Wednesday": {
+        "cpu_avg": 32.1,
+        "cpu_max": 36.0,
+        "active": true
+      },
+      "Thursday": {
+        "cpu_avg": 32.1,
+        "cpu_max": 36.0,
+        "active": true
+      },
+      "Friday": {
+        "cpu_avg": 32.0,
+        "cpu_max": 36.0,
+        "active": true
+      },
+      "Saturday": {
+        "cpu_avg": 32.1,
+        "cpu_max": 36.0,
+        "active": true
+      },
+      "Sunday": {
+        "cpu_avg": 32.0,
+        "cpu_max": 36.0,
+        "active": true
+      }
+    },
+    "job_windows": [],
+    "p95_scale_down_times": {}
+  },
+  {
+    "instance_id": "i-5fg678hi901jk234f",
+    "instance_name": "Auto-CAT-2 Server",
+    "current_type": "m5.2xlarge",
+    "region": "us-east-1",
+    "category": "CAT-2",
+    "category_label": "Day-Patterned",
+    "schedule_type": "day_of_week",
+    "metrics": {
+      "active_days_per_week": 5,
+      "cpu_cov": 1.09,
+      "peak_to_avg_ratio": 3.21,
+      "trend_slope_pct_per_week": 0.06,
+      "overall_cpu_avg": 22.4,
+      "overall_cpu_max": 72.0
+    },
+    "day_of_week_profile": {
+      "Monday": {
+        "cpu_avg": 30.4,
+        "cpu_max": 72.0,
+        "active": true
+      },
+      "Tuesday": {
+        "cpu_avg": 30.2,
+        "cpu_max": 72.0,
+        "active": true
+      },
+      "Wednesday": {
+        "cpu_avg": 30.5,
+        "cpu_max": 71.9,
+        "active": true
+      },
+      "Thursday": {
+        "cpu_avg": 30.5,
+        "cpu_max": 71.9,
+        "active": true
+      },
+      "Friday": {
+        "cpu_avg": 30.0,
+        "cpu_max": 71.9,
+        "active": true
+      },
+      "Saturday": {
+        "cpu_avg": 6.6,
+        "cpu_max": 10.0,
+        "active": false
+      },
+      "Sunday": {
+        "cpu_avg": 6.5,
+        "cpu_max": 10.0,
+        "active": false
+      }
+    },
+    "job_windows": [],
+    "p95_scale_down_times": {}
+  },
+  {
+    "instance_id": "i-6gh789ij012kl345g",
+    "instance_name": "Auto-CAT-3 Server",
+    "current_type": "m5.xlarge",
+    "region": "us-east-1",
+    "category": "CAT-3",
+    "category_label": "Periodic Burst",
+    "schedule_type": "time_slot",
+    "metrics": {
+      "active_days_per_week": 2,
+      "cpu_cov": 1.82,
+      "peak_to_avg_ratio": 8.81,
+      "trend_slope_pct_per_week": -0.25,
+      "overall_cpu_avg": 10.0,
+      "overall_cpu_max": 88.0
+    },
+    "day_of_week_profile": {
+      "Monday": {
+        "cpu_avg": 25.2,
+        "cpu_max": 88.0,
+        "active": true
+      },
+      "Tuesday": {
+        "cpu_avg": 4.4,
+        "cpu_max": 8.0,
+        "active": false
+      },
+      "Wednesday": {
+        "cpu_avg": 4.5,
+        "cpu_max": 8.0,
+        "active": false
+      },
+      "Thursday": {
+        "cpu_avg": 25.1,
+        "cpu_max": 87.5,
+        "active": true
+      },
+      "Friday": {
+        "cpu_avg": 4.4,
+        "cpu_max": 8.0,
+        "active": false
+      },
+      "Saturday": {
+        "cpu_avg": 4.6,
+        "cpu_max": 8.0,
+        "active": false
+      },
+      "Sunday": {
+        "cpu_avg": 4.4,
+        "cpu_max": 8.0,
+        "active": false
+      }
+    },
+    "job_windows": [
+      {
+        "day": "Monday",
+        "start_time": "09:00",
+        "end_time": "17:00",
+        "crosses_midnight": false
+      },
+      {
+        "day": "Thursday",
+        "start_time": "09:00",
+        "end_time": "17:00",
+        "crosses_midnight": false
+      }
+    ],
+    "p95_scale_down_times": {
+      "Monday": "17:30",
+      "Thursday": "17:30"
+    }
+  },
+  {
+    "instance_id": "i-7hi890jk123lm456h",
+    "instance_name": "Auto-CAT-5 Server",
+    "current_type": "t3.medium",
+    "region": "us-east-1",
+    "category": "CAT-5",
+    "category_label": "Zombie",
+    "schedule_type": "terminate",
+    "metrics": {
+      "active_days_per_week": 0,
+      "cpu_cov": 0.51,
+      "peak_to_avg_ratio": 1.87,
+      "trend_slope_pct_per_week": -0.0,
+      "overall_cpu_avg": 0.4,
+      "overall_cpu_max": 0.8
+    },
+    "day_of_week_profile": {
+      "Monday": {
+        "cpu_avg": 0.4,
+        "cpu_max": 0.8,
+        "active": false
+      },
+      "Tuesday": {
+        "cpu_avg": 0.4,
+        "cpu_max": 0.8,
+        "active": false
+      },
+      "Wednesday": {
+        "cpu_avg": 0.4,
+        "cpu_max": 0.8,
+        "active": false
+      },
+      "Thursday": {
+        "cpu_avg": 0.4,
+        "cpu_max": 0.8,
+        "active": false
+      },
+      "Friday": {
+        "cpu_avg": 0.4,
+        "cpu_max": 0.8,
+        "active": false
+      },
+      "Saturday": {
+        "cpu_avg": 0.4,
+        "cpu_max": 0.8,
+        "active": false
+      },
+      "Sunday": {
+        "cpu_avg": 0.4,
+        "cpu_max": 0.8,
+        "active": false
+      }
+    },
+    "job_windows": [],
+    "p95_scale_down_times": {}
+  }
+]

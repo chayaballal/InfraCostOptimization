@@ -800,8 +800,546 @@ function RecommendationsPanel() {
   );
 }
 
+// ── Category badge colors ────────────────────────────────────────
+const CAT_STYLE = {
+  "CAT-1": { color: "#16a34a", bg: "#dcfce7", border: "#86efac", label: "Stable" },
+  "CAT-2": { color: "#2563eb", bg: "#dbeafe", border: "#93c5fd", label: "Day-Patterned" },
+  "CAT-3": { color: "#ea580c", bg: "#ffedd5", border: "#fdba74", label: "Periodic Burst" },
+  "CAT-4": { color: "#dc2626", bg: "#fee2e2", border: "#fca5a5", label: "Spiky" },
+  "CAT-5": { color: "#78716c", bg: "#f5f5f4", border: "#d6d3d1", label: "Zombie" },
+  "CAT-6": { color: "#7c3aed", bg: "#ede9fe", border: "#c4b5fd", label: "Trending ↑" },
+};
+
+const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+function CatBadge({ category }) {
+  const s = CAT_STYLE[category] || CAT_STYLE["CAT-1"];
+  return (
+    <span style={{
+      display: "inline-block", padding: "2px 10px", borderRadius: 20,
+      border: `1px solid ${s.border}`, background: s.bg, color: s.color,
+      fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", whiteSpace: "nowrap",
+    }}>
+      {category} · {s.label}
+    </span>
+  );
+}
+
+// ── Timeline Bar for time_slot schedules ──────────────────────────
+function TimelineBar({ slots }) {
+  if (!slots || !slots.length) return null;
+  const toMin = (t) => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
+  const totalMin = 24 * 60;
+
+  // Build segments from slot data
+  const segments = [];
+  const slot = slots[0]; // one day's slots
+  if (!slot) return null;
+
+  const upMin = toMin(slot.scale_up_time || "00:00");
+  const downMin = toMin(slot.scale_down_time || "24:00");
+  const crosses = slot.crosses_midnight;
+
+  // Before scale-up: idle
+  if (upMin > 0) {
+    segments.push({ start: 0, end: upMin, type: "idle", label: "Idle", color: "#e5e3de" });
+  }
+  // Pre-warm: 15 min before scale-up (already included in scale_up_time)
+  // scale_up to end or midnight
+  if (crosses) {
+    segments.push({ start: upMin, end: totalMin, type: "peak", label: "Peak (→midnight)", color: "#ea580c" });
+    segments.push({ start: 0, end: downMin, type: "peak", label: "Peak (overnight)", color: "#f97316" });
+    if (downMin < upMin) {
+      segments.push({ start: downMin, end: upMin, type: "idle", label: "Idle", color: "#e5e3de" });
+    }
+  } else {
+    segments.push({ start: upMin, end: downMin, type: "peak", label: "Peak", color: "#ea580c" });
+    if (downMin < totalMin) {
+      segments.push({ start: downMin, end: totalMin, type: "idle", label: "Idle", color: "#e5e3de" });
+    }
+  }
+
+  // Sort by start and render
+  const sorted = segments.filter(s => s.end > s.start).sort((a, b) => a.start - b.start);
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ fontSize: 10, color: "var(--muted)", marginBottom: 4, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase" }}>24h Timeline</div>
+      <div style={{ display: "flex", height: 28, borderRadius: 6, overflow: "hidden", border: "1px solid var(--border)", position: "relative" }}>
+        {sorted.map((seg, i) => {
+          const widthPct = ((seg.end - seg.start) / totalMin) * 100;
+          return (
+            <div key={i} title={`${seg.label}: ${Math.floor(seg.start/60)}:${String(seg.start%60).padStart(2,"0")} → ${Math.floor(seg.end/60)}:${String(seg.end%60).padStart(2,"0")}`}
+              style={{ width: `${widthPct}%`, background: seg.color, minWidth: 2, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              {widthPct > 12 && <span style={{ fontSize: 9, color: seg.type === "idle" ? "#78716c" : "#fff", fontWeight: 600, whiteSpace: "nowrap" }}>{seg.label}</span>}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "var(--muted)", marginTop: 2 }}>
+        <span>12am</span><span>6am</span><span>12pm</span><span>6pm</span><span>12am</span>
+      </div>
+    </div>
+  );
+}
+
+// ── Schedule Detail Panel ────────────────────────────────────────
+function ScheduleDetail({ rec }) {
+  const [selectedDay, setSelectedDay] = useState("Monday");
+  const st = rec.schedule_type;
+
+  if (st === "single") {
+    const sr = rec.single_recommendation || {};
+    return (
+      <div style={{ padding: 16, background: "var(--surface)", borderRadius: 8, border: "1px solid var(--border)", marginTop: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>Recommended: <span style={{ color: "var(--accent)" }}>{sr.instance_type || "—"}</span> · All 7 days</div>
+        {sr.reason && <div style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.5 }}>{sr.reason}</div>}
+        {rec.trend_alert && (
+          <div style={{ marginTop: 12, padding: 12, background: "#ede9fe", border: "1px solid #c4b5fd", borderRadius: 8 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#7c3aed", marginBottom: 4 }}>📈 Growing Workload Alert</div>
+            <div style={{ fontSize: 11, color: "#5b21b6" }}>Projected CPU in 4 weeks: {rec.projected_cpu_in_4_weeks_pct ?? "—"}%</div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (st === "day_of_week") {
+    const schedule = rec.day_of_week_schedule || {};
+    const dayData = schedule[selectedDay] || {};
+    return (
+      <div style={{ padding: 16, background: "var(--surface)", borderRadius: 8, border: "1px solid var(--border)", marginTop: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)" }}>View by day:</span>
+          <select value={selectedDay} onChange={e => setSelectedDay(e.target.value)}
+            style={{ fontSize: 12, padding: "4px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--canvas)", color: "var(--text)", cursor: "pointer" }}>
+            {DAYS.map(d => <option key={d} value={d}>{d}</option>)}
+          </select>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div><span style={{ fontSize: 10, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase" }}>Recommended type</span><div style={{ fontSize: 14, fontWeight: 700, color: "var(--accent)", marginTop: 2 }}>{dayData.instance_type || "—"}</div></div>
+          <div><span style={{ fontSize: 10, color: "var(--muted)", fontWeight: 600, textTransform: "uppercase" }}>Est. daily cost</span><div style={{ fontSize: 14, fontWeight: 700, color: "var(--text)", marginTop: 2 }}>${(dayData.estimated_daily_cost_usd || 0).toFixed(2)}</div></div>
+        </div>
+        {/* All-days summary table */}
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, marginTop: 16 }}>
+          <thead><tr style={{ borderBottom: "2px solid var(--border)" }}>
+            {["Day", "Type", "$/day"].map(h => <th key={h} style={{ padding: "6px 10px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {DAYS.map(d => { const dd = schedule[d] || {}; return (
+              <tr key={d} style={{ borderBottom: "1px solid var(--border)", background: d === selectedDay ? "var(--accent-lt)" : "transparent" }}>
+                <td style={{ padding: "6px 10px", fontWeight: d === selectedDay ? 700 : 400 }}>{d}</td>
+                <td style={{ padding: "6px 10px", fontFamily: "var(--mono)", color: "var(--accent)" }}>{dd.instance_type || "—"}</td>
+                <td style={{ padding: "6px 10px" }}>${(dd.estimated_daily_cost_usd || 0).toFixed(2)}</td>
+              </tr>
+            );})}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  if (st === "time_slot") {
+    const slots = rec.time_slot_schedule || [];
+    const defaultIdle = slots.length > 0 ? slots[0].idle_instance_type : (rec.current_type || "t3.nano");
+    const daySlot = slots.find(s => s.day === selectedDay);
+    return (
+      <div style={{ padding: 16, background: "var(--surface)", borderRadius: 8, border: "1px solid var(--border)", marginTop: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: "var(--muted)" }}>View day:</span>
+          <select value={selectedDay} onChange={e => setSelectedDay(e.target.value)}
+            style={{ fontSize: 12, padding: "4px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--canvas)", color: "var(--text)", cursor: "pointer" }}>
+            {DAYS.map(d => <option key={d} value={d}>{d}</option>)}
+          </select>
+        </div>
+        {daySlot ? (
+          <>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+              <thead><tr style={{ borderBottom: "2px solid var(--border)" }}>
+                {["Slot", "Start", "End", "Type", "Hours", "Cost/day"].map(h => <th key={h} style={{ padding: "6px 10px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>{h}</th>)}
+              </tr></thead>
+              <tbody>
+                <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                  <td style={{ padding: "6px 10px", color: "#78716c" }}>Idle</td>
+                  <td style={{ padding: "6px 10px" }}>00:00</td>
+                  <td style={{ padding: "6px 10px" }}>{daySlot.scale_up_time}</td>
+                  <td style={{ padding: "6px 10px", fontFamily: "var(--mono)", color: "var(--muted)" }}>{daySlot.idle_instance_type}</td>
+                  <td style={{ padding: "6px 10px" }}>{daySlot.idle_hours_per_day ?? "—"}</td>
+                  <td style={{ padding: "6px 10px" }}>${(daySlot.idle_cost_per_day_usd || 0).toFixed(2)}</td>
+                </tr>
+                <tr style={{ borderBottom: "1px solid var(--border)", background: "#fff7ed" }}>
+                  <td style={{ padding: "6px 10px", color: "#ea580c", fontWeight: 700 }}>Job window {daySlot.crosses_midnight ? "→" : ""}</td>
+                  <td style={{ padding: "6px 10px" }}>{daySlot.scale_up_time}</td>
+                  <td style={{ padding: "6px 10px" }}>{daySlot.scale_down_time}{daySlot.crosses_midnight ? " ↩" : ""}</td>
+                  <td style={{ padding: "6px 10px", fontFamily: "var(--mono)", color: "#ea580c", fontWeight: 700 }}>{daySlot.peak_instance_type}</td>
+                  <td style={{ padding: "6px 10px" }}>{daySlot.peak_hours_per_day ?? "—"}</td>
+                  <td style={{ padding: "6px 10px", fontWeight: 700 }}>${(daySlot.peak_cost_per_day_usd || 0).toFixed(2)}</td>
+                </tr>
+                <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                  <td style={{ padding: "6px 10px", color: "#78716c" }}>Idle</td>
+                  <td style={{ padding: "6px 10px" }}>{daySlot.scale_down_time}</td>
+                  <td style={{ padding: "6px 10px" }}>24:00</td>
+                  <td style={{ padding: "6px 10px", fontFamily: "var(--mono)", color: "var(--muted)" }}>{daySlot.idle_instance_type}</td>
+                  <td style={{ padding: "6px 10px" }}>—</td>
+                  <td style={{ padding: "6px 10px" }}>—</td>
+                </tr>
+              </tbody>
+            </table>
+            <div style={{ marginTop: 8, fontSize: 12, fontWeight: 700, textAlign: "right", color: "var(--text)" }}>
+              Day total: ${(daySlot.total_cost_per_day_usd || 0).toFixed(2)}
+            </div>
+            <TimelineBar slots={[daySlot]} />
+          </>
+        ) : (
+          <div style={{ fontSize: 12, color: "var(--muted)", padding: 16, textAlign: "center" }}>No active slots for this day. Instance runs at {defaultIdle} all day.</div>
+        )}
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, marginTop: 16 }}>
+          <thead><tr style={{ borderBottom: "2px solid var(--border)" }}>
+            {["Day", "Type", "$/day"].map(h => <th key={h} style={{ padding: "6px 10px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {DAYS.map(d => { 
+                const dd = slots.find(s => s.day === d);
+                const dispType = dd ? `${dd.peak_instance_type} / ${dd.idle_instance_type}` : defaultIdle;
+                const costDisp = dd?.total_cost_per_day_usd != null ? `$${dd.total_cost_per_day_usd.toFixed(2)}` : "—";
+                return (
+                  <tr key={d} style={{ borderBottom: "1px solid var(--border)", background: d === selectedDay ? "var(--accent-lt)" : "transparent" }}>
+                    <td style={{ padding: "6px 10px", fontWeight: d === selectedDay ? 700 : 400 }}>{d}</td>
+                    <td style={{ padding: "6px 10px", fontFamily: "var(--mono)", color: "var(--accent)" }}>{dispType}</td>
+                    <td style={{ padding: "6px 10px" }}>{costDisp}</td>
+                  </tr>
+                );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  if (st === "autoscaling") {
+    const cfg = rec.autoscaling_config || {};
+    return (
+      <div style={{ padding: 16, background: "#fef3c7", borderRadius: 8, border: "1px solid #fcd34d", marginTop: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#d97706", marginBottom: 8 }}>⚠ Autoscaling Recommended</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, fontSize: 12 }}>
+          <div><span style={{ color: "#92400e", fontWeight: 600 }}>Base type:</span> {cfg.base_instance_type || "—"}</div>
+          <div><span style={{ color: "#92400e", fontWeight: 600 }}>Scale trigger:</span> CPU &gt; {cfg.target_cpu_threshold_pct || 60}%</div>
+          <div><span style={{ color: "#92400e", fontWeight: 600 }}>Scale-out to:</span> {cfg.scale_out_type || "—"}</div>
+        </div>
+        {cfg.reason && <div style={{ marginTop: 8, fontSize: 11, color: "#78350f", lineHeight: 1.5 }}>{cfg.reason}</div>}
+      </div>
+    );
+  }
+
+  if (st === "terminate") {
+    return (
+      <div style={{ padding: 16, background: "#fee2e2", borderRadius: 8, border: "1px solid #fca5a5", marginTop: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#dc2626", marginBottom: 8 }}>🚨 Termination Candidate</div>
+        <div style={{ fontSize: 12, color: "#991b1b", lineHeight: 1.5 }}>
+          This instance shows near-zero CPU utilisation. Monthly waste: <strong>${(rec.current_monthly_cost_usd || 0).toFixed(2)}/mo</strong> (${((rec.current_monthly_cost_usd || 0) * 12).toFixed(2)}/yr). Recommended action: terminate or convert to Spot.
+        </div>
+      </div>
+    );
+  }
+
+  return <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 12 }}>Unknown schedule type: {st}</div>;
+}
+
+function StatusBadge({ status }) {
+  const styles = {
+    Proposed: { color: "#0891b2", bg: "#e0f2fe", border: "#bae6fd" },
+    Approved: { color: "#ea580c", bg: "#ffedd5", border: "#fed7aa" },
+    Implemented: { color: "#16a34a", bg: "#dcfce7", border: "#bbf7d0" },
+  };
+  const s = styles[status] || styles.Proposed;
+  return (
+    <span style={{
+      display: "inline-block", padding: "1px 8px", borderRadius: 12,
+      border: `1px solid ${s.border}`, background: s.bg, color: s.color,
+      fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em",
+    }}>
+      {status}
+    </span>
+  );
+}
+
+// ── Schedule Instance Card ───────────────────────────────────────
+function ScheduleInstanceCard({ rec, refresh }) {
+  const [expanded, setExpanded] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const saving = rec.estimated_monthly_saving_usd || 0;
+  const savingPct = rec.saving_pct || 0;
+  const status = rec.status || "Proposed";
+
+  let recLabel = rec.recommended_type || "—";
+  if (rec.schedule_type === "day_of_week") recLabel = "7-day schedule";
+  if (rec.schedule_type === "time_slot") recLabel = "time-slot schedule";
+  if (rec.schedule_type === "terminate") recLabel = "Terminate";
+  if (rec.schedule_type === "autoscaling") recLabel = "Autoscaling";
+
+  const updateStatus = async (newStatus) => {
+    setIsUpdating(true);
+    try {
+      await fetch(`${API}/schedule-recommendations/${rec.instance_id}?status=${newStatus}`, { method: "PATCH" });
+      refresh();
+    } catch (e) {
+      console.error("Failed to update status", e);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  return (
+    <div style={{
+      border: "1px solid var(--border)", borderRadius: 10, padding: "14px 18px",
+      background: "var(--canvas)", transition: "box-shadow 0.15s",
+      boxShadow: expanded ? "var(--shadow-md)" : "none",
+      opacity: isUpdating ? 0.6 : 1,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ flex: 1, cursor: "pointer" }} onClick={() => setExpanded(!expanded)}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+            <span style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--accent)", fontWeight: 600 }}>{rec.instance_id}</span>
+            <span style={{ fontSize: 12, color: "var(--muted)" }}>·</span>
+            <span style={{ fontSize: 13, color: "var(--text)", fontWeight: 500 }}>{rec.instance_name}</span>
+            <CatBadge category={rec.category} />
+            <StatusBadge status={status} />
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 16, fontSize: 12, color: "var(--muted)" }}>
+            <span>{rec.current_type} → <strong style={{ color: "var(--text)" }}>{recLabel}</strong></span>
+            <span>Current: <strong>${(rec.current_monthly_cost_usd || 0).toFixed(2)}/mo</strong></span>
+            <span>New: <strong>${(rec.new_monthly_cost_usd || 0).toFixed(2)}/mo</strong></span>
+          </div>
+        </div>
+        
+        <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
+          {/* Action Area */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, borderRight: "1px solid var(--border)", paddingRight: 20 }}>
+            <select 
+              value={status}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => updateStatus(e.target.value)}
+              style={{
+                fontSize: 11, padding: "5px 10px", borderRadius: 6, 
+                border: "1px solid var(--border)", background: "var(--canvas)", 
+                cursor: "pointer", color: "var(--text)", fontWeight: 600
+              }}
+            >
+              <option value="Proposed">Proposed</option>
+              <option value="Approved">Approved</option>
+              <option value="Implemented">Implemented</option>
+            </select>
+
+            <button
+              onClick={(e) => { e.stopPropagation(); updateStatus("Implemented"); }}
+              disabled={status !== "Approved" || isUpdating}
+              style={{
+                fontSize: 11, padding: "6px 12px", borderRadius: 6,
+                border: "none",
+                background: status === "Approved" ? "var(--accent)" : "#e5e7eb",
+                color: status === "Approved" ? "#fff" : "#9ca3af",
+                cursor: status === "Approved" ? "pointer" : "not-allowed",
+                fontWeight: 700,
+                transition: "all 0.2s",
+                boxShadow: status === "Approved" ? "0 2px 4px rgba(37, 99, 235, 0.2)" : "none"
+              }}
+            >
+              Create JIRA ticket
+            </button>
+          </div>
+
+          <div style={{ textAlign: "right", minWidth: 100 }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: saving > 0 ? "#16a34a" : saving < 0 ? "#dc2626" : "var(--muted)" }}>
+              ${Math.abs(saving).toFixed(2)}/mo
+            </div>
+            <div style={{ fontSize: 10, color: "var(--muted)" }}>{Math.abs(savingPct).toFixed(0)}%</div>
+          </div>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+            onClick={() => setExpanded(!expanded)}
+            style={{ transform: expanded ? "rotate(180deg)" : "rotate(0)", transition: "transform 0.2s", color: "var(--muted)", cursor: "pointer" }}>
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </div>
+      </div>
+      {expanded && <ScheduleDetail rec={rec} />}
+    </div>
+  );
+}
+
+// ── Schedule Dashboard ───────────────────────────────────────────
+function ScheduleDashboard() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [catFilter, setCatFilter] = useState("all");
+  const [running, setRunning] = useState(false);
+  const [agentOutput, setAgentOutput] = useState("");
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    fetch(`${API}/schedule-recommendations`)
+      .then(r => r.json())
+      .then(d => setData(d))
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const runAgent = useCallback(async () => {
+    setRunning(true);
+    setAgentOutput("");
+    try {
+      const res = await fetch(`${API}/run-schedule-agent`, { method: "POST" });
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const d = line.slice(6).trim();
+          if (d === "[DONE]") continue;
+          try {
+            const { token } = JSON.parse(d);
+            setAgentOutput(prev => prev + token);
+          } catch {}
+        }
+      }
+      // Reload data after agent completes
+      load();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setRunning(false);
+    }
+  }, [load]);
+
+  if (loading && !data) return (
+    <div style={{ padding: 32, display: "flex", flexDirection: "column", gap: 12 }}>
+      {[1,2,3,4].map(i => <div key={i} className="skeleton" style={{ height: 80 }} />)}
+    </div>
+  );
+
+  const recs = data?.recommendations || [];
+  const summary = data?.summary || {};
+  const cats = ["all", "CAT-1", "CAT-2", "CAT-3", "CAT-4", "CAT-5", "CAT-6"];
+  const filtered = catFilter === "all" ? recs : recs.filter(r => r.category === catFilter);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+
+      {/* Summary cards */}
+      <div style={{
+        display: "flex", gap: 16, padding: "16px 32px", borderBottom: "1px solid var(--border)",
+        background: "var(--canvas)", flexShrink: 0, flexWrap: "wrap", alignItems: "center",
+      }}>
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          <span style={{ fontSize: 10, fontWeight: 600, color: "var(--muted)", letterSpacing: "0.1em", textTransform: "uppercase" }}>Instances</span>
+          <span style={{ fontSize: 24, fontWeight: 700, color: "var(--text)" }}>{summary.total_instances || 0}</span>
+        </div>
+        <div style={{ width: 1, height: 40, background: "var(--border)" }} />
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          <span style={{ fontSize: 10, fontWeight: 600, color: "var(--muted)", letterSpacing: "0.1em", textTransform: "uppercase" }}>Current Cost</span>
+          <span style={{ fontSize: 22, fontWeight: 700, color: "var(--text)" }}>${(summary.total_current_monthly_cost_usd || 0).toFixed(0)}/mo</span>
+        </div>
+        <div style={{ width: 1, height: 40, background: "var(--border)" }} />
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          <span style={{ fontSize: 10, fontWeight: 600, color: "var(--muted)", letterSpacing: "0.1em", textTransform: "uppercase" }}>After Schedule</span>
+          <span style={{ fontSize: 22, fontWeight: 700, color: "var(--accent)" }}>${(summary.total_new_monthly_cost_usd || 0).toFixed(0)}/mo</span>
+        </div>
+        <div style={{ width: 1, height: 40, background: "var(--border)" }} />
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          <span style={{ fontSize: 10, fontWeight: 600, color: "var(--muted)", letterSpacing: "0.1em", textTransform: "uppercase" }}>Annual Saving</span>
+          <span style={{ fontSize: 22, fontWeight: 700, color: "#16a34a" }}>${(summary.total_estimated_annual_saving_usd || 0).toLocaleString()}</span>
+        </div>
+
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+          <button
+            disabled={running}
+            onClick={runAgent}
+            style={{
+              padding: "8px 18px", borderRadius: 8, border: "none",
+              background: running ? "var(--muted)" : "var(--accent)",
+              color: "#fff", fontSize: 12, fontWeight: 700, cursor: running ? "not-allowed" : "pointer",
+              display: "flex", alignItems: "center", gap: 6,
+            }}>
+            {running ? (
+              <span style={{ width: 12, height: 12, border: "2px solid rgba(255,255,255,0.3)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
+            ) : (
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            )}
+            {running ? "Running Agent..." : "Run Agent"}
+          </button>
+          <button onClick={load}
+            style={{
+              padding: "8px 14px", borderRadius: 8, border: "1px solid var(--border)",
+              background: "var(--canvas)", color: "var(--text2)", fontSize: 12, cursor: "pointer",
+              display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 500,
+            }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      {/* Category filter pills */}
+      <div style={{
+        display: "flex", gap: 6, padding: "10px 32px",
+        borderBottom: "1px solid var(--border)", flexShrink: 0, flexWrap: "wrap",
+        background: "var(--canvas)",
+      }}>
+        {cats.map(c => {
+          const cs = CAT_STYLE[c];
+          const cnt = c === "all" ? recs.length : recs.filter(r => r.category === c).length;
+          return (
+            <button key={c} onClick={() => setCatFilter(c)}
+              style={{
+                padding: "4px 14px", borderRadius: 20, border: "1px solid",
+                borderColor: catFilter === c ? (cs?.border || "var(--accent)") : "var(--border)",
+                background: catFilter === c ? (cs?.bg || "var(--accent-lt)") : "transparent",
+                color: catFilter === c ? (cs?.color || "var(--accent)") : "var(--muted)",
+                fontSize: 11, fontWeight: 600, cursor: "pointer", transition: "all 0.15s",
+              }}>
+              {c === "all" ? `All (${cnt})` : `${c} ${cs?.label || ""} (${cnt})`}
+            </button>
+          );
+        })}
+      </div>
+
+
+
+      {/* Error */}
+      {error && (
+        <div style={{ padding: "12px 32px" }}>
+          <div style={{ padding: 12, borderRadius: 8, border: "1px solid #fca5a5", background: "#fee2e2", color: "#dc2626", fontSize: 12 }}>{error}</div>
+        </div>
+      )}
+
+      {/* Instance cards */}
+      <div style={{ flex: 1, overflowY: "auto", padding: "16px 32px", display: "flex", flexDirection: "column", gap: 10 }}>
+        {filtered.length === 0 ? (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 300, gap: 12, color: "var(--muted)" }}>
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+            <div style={{ fontSize: 14, fontWeight: 500 }}>{recs.length === 0 ? "No schedule recommendations yet" : "No instances in this category"}</div>
+            {recs.length === 0 && <div style={{ fontSize: 12 }}>Click "Run Schedule Agent" to generate recommendations</div>}
+          </div>
+        ) : (
+          filtered.map(rec => <ScheduleInstanceCard key={rec.instance_id} rec={rec} refresh={load} />)
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main App ──────────────────────────────────────────────────────
 export default function App() {
+  const [activeView, setActiveView]     = useState("schedule");
   const [instances, setInstances]       = useState([]);
   const [selected, setSelected]         = useState([]);
   const [analysedInstanceIds, setAnalysedInstanceIds] = useState([]);
@@ -814,7 +1352,6 @@ export default function App() {
   const [error, setError]               = useState(null);
   const [loadingInst, setLoadingInst]   = useState(true);
   const [sidebarOpen, setSidebarOpen]   = useState(true);
-  const [activeView, setActiveView]     = useState("analysis"); // "analysis" | "savings"
   const [costComparisons, setCostComparisons] = useState([]);
   const [isSaving, setIsSaving] = useState(false);
   const [recommendations, setRecommendations] = useState([]);
@@ -1574,8 +2111,7 @@ export default function App() {
               </svg>
             </div>
             <div>
-              <div className="nav-logo-text">EC2 Analyser</div>
-              <div className="nav-logo-sub">powered by Groq</div>
+              <div className="nav-logo-text">Infra Optimization Agent</div>
             </div>
           </div>
 
@@ -1604,10 +2140,6 @@ export default function App() {
 
         {/* ── Stats bar ── */}
         <div className="statsbar">
-          <div className="sbar-item">
-            <span className="sbar-label">Model</span>
-            <span className="sbar-value">llama-3.3-70b</span>
-          </div>
           <div className="sbar-item">
             <span className="sbar-label">Focus</span>
             <span className="sbar-value accent">{focus.length} / {focusOptions.length} selected</span>
@@ -1737,9 +2269,7 @@ export default function App() {
             {/* View Tab Bar */}
             <div className="view-tabs">
               {[
-                { id: "analysis", label: "Analysis",    icon: "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" },
-                { id: "savings",         label: "Savings Board",    icon: "M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" },
-                { id: "recommendations", label: "Recommendations",  icon: "M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" },
+                { id: "schedule",        label: "Analyze",         icon: "M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" },
               ].map(tab => (
                 <button
                   key={tab.id}
@@ -1798,6 +2328,11 @@ export default function App() {
               {/* Recommendations view */}
               {activeView === "recommendations" && (
                 <RecommendationsPanel />
+              )}
+
+              {/* Schedule view */}
+              {activeView === "schedule" && (
+                <ScheduleDashboard />
               )}
 
               {/* Analysis view */}

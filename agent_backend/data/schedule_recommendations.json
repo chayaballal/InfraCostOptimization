@@ -1,0 +1,409 @@
+[
+  {
+    "instance_id": "i-0408ca0508e3ccf50",
+    "category": "CAT-2",
+    "schedule_type": "day_of_week",
+    "single_recommendation": null,
+    "day_of_week_schedule": {
+      "Monday": {
+        "instance_type": "c5.xlarge",
+        "estimated_daily_cost_usd": 4.08
+      },
+      "Tuesday": {
+        "instance_type": "c5.xlarge",
+        "estimated_daily_cost_usd": 4.08
+      },
+      "Wednesday": {
+        "instance_type": "c5.xlarge",
+        "estimated_daily_cost_usd": 4.08
+      },
+      "Thursday": {
+        "instance_type": "c5.xlarge",
+        "estimated_daily_cost_usd": 4.08
+      },
+      "Friday": {
+        "instance_type": "c5.xlarge",
+        "estimated_daily_cost_usd": 4.08
+      },
+      "Saturday": {
+        "instance_type": "t3.micro",
+        "estimated_daily_cost_usd": 0.25
+      },
+      "Sunday": {
+        "instance_type": "t3.micro",
+        "estimated_daily_cost_usd": 0.25
+      }
+    },
+    "time_slot_schedule": null,
+    "autoscaling_config": null,
+    "autoscaling_recommended": false,
+    "terminate_recommended": false,
+    "trend_alert": false,
+    "projected_cpu_in_4_weeks_pct": null,
+    "risk_flags": [],
+    "notes": "Recommended instance types based on day-of-week CPU profile",
+    "current_monthly_cost_usd": 280.32,
+    "new_monthly_cost_usd": 90.5,
+    "estimated_monthly_saving_usd": 189.82,
+    "saving_pct": 67.7,
+    "instance_name": "Auto-CAT-2 Server",
+    "current_type": "m5.2xlarge",
+    "region": "us-east-1",
+    "category_label": "Day-Patterned",
+    "recommendation_date": "2026-03-30",
+    "analysed_at": "2026-03-30T06:11:59.475706+00:00"
+  },
+  {
+    "instance_id": "i-0ab123cd456ef789a",
+    "category": "CAT-3",
+    "schedule_type": "time_slot",
+    "single_recommendation": null,
+    "day_of_week_schedule": null,
+    "time_slot_schedule": [
+      {
+        "day": "Monday",
+        "scale_up_time": "08:45",
+        "scale_down_time": "17:30",
+        "peak_instance_type": "m5.xlarge",
+        "idle_instance_type": "t3.nano",
+        "crosses_midnight": false,
+        "peak_hours_per_day": 8.75,
+        "idle_hours_per_day": 15.25,
+        "peak_cost_per_day_usd": 1.68,
+        "idle_cost_per_day_usd": 0.08,
+        "total_cost_per_day_usd": 1.76
+      },
+      {
+        "day": "Thursday",
+        "scale_up_time": "08:45",
+        "scale_down_time": "17:30",
+        "peak_instance_type": "m5.xlarge",
+        "idle_instance_type": "t3.nano",
+        "crosses_midnight": false,
+        "peak_hours_per_day": 8.75,
+        "idle_hours_per_day": 15.25,
+        "peak_cost_per_day_usd": 1.68,
+        "idle_cost_per_day_usd": 0.08,
+        "total_cost_per_day_usd": 1.76
+      }
+    ],
+    "autoscaling_config": null,
+    "autoscaling_recommended": false,
+    "terminate_recommended": false,
+    "trend_alert": false,
+    "projected_cpu_in_4_weeks_pct": null,
+    "risk_flags": [],
+    "notes": "CAT-3 Periodic Burst pattern detected, recommending time-slot schedule with peak and idle instance types",
+    "current_monthly_cost_usd": 140.16,
+    "new_monthly_cost_usd": 17.94,
+    "estimated_monthly_saving_usd": 122.22,
+    "saving_pct": 87.2,
+    "instance_name": "Auto-CAT-3 Server",
+    "current_type": "m5.xlarge",
+    "region": "us-east-1",
+    "category_label": "Periodic Burst",
+    "recommendation_date": "2026-03-30",
+    "analysed_at": "2026-03-30T06:11:59.475706+00:00",
+    "status": "Approved"
+  },
+  {
+    "instance_id": "i-0d7S82131fb7175c2",
+    "category": "CAT-1",
+    "schedule_type": "single",
+    "single_recommendation": {
+      "instance_type": "c5.large",
+      "reason": "Stable usage pattern with average CPU utilization of 32.0% matches the capacity of a c5.large instance type."
+    },
+    "day_of_week_schedule": {},
+    "time_slot_schedule": [],
+    "autoscaling_config": {},
+    "autoscaling_recommended": false,
+    "terminate_recommended": false,
+    "trend_alert": false,
+    "projected_cpu_in_4_weeks_pct": null,
+    "risk_flags": [],
+    "notes": "The current instance type m5.large can be downsized to c5.large due to the stable and relatively low CPU utilization.",
+    "current_monthly_cost_usd": 70.08,
+    "new_monthly_cost_usd": 62.05,
+    "estimated_monthly_saving_usd": 8.03,
+    "saving_pct": 11.5,
+    "instance_name": "Auto-CAT-1 Server",
+    "current_type": "m5.large",
+    "region": "us-east-1",
+    "category_label": "Stable",
+    "recommendation_date": "2026-03-30",
+    "analysed_at": "2026-03-30T06:11:59.475706+00:00"
+  },
+  {
+    "instance_id": "i-1bc234de567fg890b",
+    "category": "CAT-4",
+    "schedule_type": "autoscaling",
+    "single_recommendation": null,
+    "day_of_week_schedule": null,
+    "time_slot_schedule": null,
+    "autoscaling_config": {
+      "base_instance_type": "m5.large",
+      "target_cpu_threshold_pct": 60,
+      "scale_out_type": "m5.xlarge",
+      "reason": "Unpredictable spiky workload with high peak-to-average ratio"
+    },
+    "autoscaling_recommended": true,
+    "terminate_recommended": false,
+    "trend_alert": false,
+    "projected_cpu_in_4_weeks_pct": null,
+    "risk_flags": [],
+    "notes": "High peak-to-average ratio indicates potential for unpredictable spikes, autoscaling recommended to handle worst-case CPU",
+    "current_monthly_cost_usd": 70.08,
+    "new_monthly_cost_usd": 70.08,
+    "estimated_monthly_saving_usd": 0.0,
+    "saving_pct": 0.0,
+    "instance_name": "Auto-CAT-4 Server",
+    "current_type": "m5.large",
+    "region": "us-east-1",
+    "category_label": "Unpredictable Spiky",
+    "recommendation_date": "2026-03-30",
+    "analysed_at": "2026-03-30T06:11:59.475706+00:00"
+  },
+  {
+    "instance_id": "i-2cd345ef678gh901c",
+    "category": "CAT-5",
+    "schedule_type": "terminate",
+    "single_recommendation": {
+      "instance_type": null,
+      "reason": "Zombie instance with no active days"
+    },
+    "day_of_week_schedule": {
+      "Monday": {
+        "instance_type": null
+      },
+      "Tuesday": {
+        "instance_type": null
+      },
+      "Wednesday": {
+        "instance_type": null
+      },
+      "Thursday": {
+        "instance_type": null
+      },
+      "Friday": {
+        "instance_type": null
+      },
+      "Saturday": {
+        "instance_type": null
+      },
+      "Sunday": {
+        "instance_type": null
+      }
+    },
+    "time_slot_schedule": [],
+    "autoscaling_config": {
+      "base_instance_type": null,
+      "target_cpu_threshold_pct": 60,
+      "scale_out_type": null,
+      "reason": "Not applicable"
+    },
+    "autoscaling_recommended": false,
+    "terminate_recommended": true,
+    "trend_alert": false,
+    "projected_cpu_in_4_weeks_pct": null,
+    "risk_flags": [],
+    "notes": "Instance is inactive and can be terminated",
+    "current_monthly_cost_usd": 30.37,
+    "new_monthly_cost_usd": 0.0,
+    "estimated_monthly_saving_usd": 30.37,
+    "saving_pct": 100.0,
+    "instance_name": "Auto-CAT-5 Server",
+    "current_type": "t3.medium",
+    "region": "us-east-1",
+    "category_label": "Zombie",
+    "recommendation_date": "2026-03-30",
+    "analysed_at": "2026-03-30T06:11:59.475706+00:00"
+  },
+  {
+    "instance_id": "i-3de456fg789hi012d",
+    "category": "CAT-6",
+    "schedule_type": "single",
+    "single_recommendation": {
+      "instance_type": "c5.xlarge",
+      "reason": "Trending workload with overall CPU average of 25.0% and trend slope of 4.66% per week. Projected CPU in 4 weeks is 41.66%, which is below 60% threshold for the current instance type."
+    },
+    "day_of_week_schedule": {},
+    "time_slot_schedule": [],
+    "autoscaling_config": {},
+    "autoscaling_recommended": false,
+    "terminate_recommended": false,
+    "trend_alert": true,
+    "projected_cpu_in_4_weeks_pct": 41.66,
+    "risk_flags": [],
+    "notes": "No changes recommended due to trending workload and projected CPU utilization below 60% threshold.",
+    "current_monthly_cost_usd": 124.1,
+    "new_monthly_cost_usd": 124.1,
+    "estimated_monthly_saving_usd": 0.0,
+    "saving_pct": 0.0,
+    "instance_name": "Auto-CAT-6 Server",
+    "current_type": "c5.xlarge",
+    "region": "us-east-1",
+    "category_label": "Trending",
+    "recommendation_date": "2026-03-30",
+    "analysed_at": "2026-03-30T06:11:59.475706+00:00"
+  },
+  {
+    "instance_id": "i-4ef567gh890ij123e",
+    "category": "CAT-1",
+    "schedule_type": "single",
+    "single_recommendation": {
+      "instance_type": "c5.large",
+      "reason": "Stable usage pattern with average CPU utilization of 32.1%, which corresponds to the recommended instance type based on the CPU sizing guide."
+    },
+    "day_of_week_schedule": {},
+    "time_slot_schedule": [],
+    "autoscaling_config": {},
+    "autoscaling_recommended": false,
+    "terminate_recommended": false,
+    "trend_alert": false,
+    "projected_cpu_in_4_weeks_pct": null,
+    "risk_flags": [],
+    "notes": "The current instance type m5.large can be downsized to c5.large, which is a more cost-efficient option for this stable workload.",
+    "current_monthly_cost_usd": 70.08,
+    "new_monthly_cost_usd": 62.05,
+    "estimated_monthly_saving_usd": 8.03,
+    "saving_pct": 11.5,
+    "instance_name": "Auto-CAT-1 Server",
+    "current_type": "m5.large",
+    "region": "us-east-1",
+    "category_label": "Stable",
+    "recommendation_date": "2026-03-30",
+    "analysed_at": "2026-03-30T06:11:59.475706+00:00"
+  },
+  {
+    "instance_id": "i-5fg678hi901jk234f",
+    "category": "CAT-2",
+    "schedule_type": "day_of_week",
+    "single_recommendation": null,
+    "day_of_week_schedule": {
+      "Monday": {
+        "instance_type": "m5.xlarge",
+        "estimated_daily_cost_usd": 4.61
+      },
+      "Tuesday": {
+        "instance_type": "m5.xlarge",
+        "estimated_daily_cost_usd": 4.61
+      },
+      "Wednesday": {
+        "instance_type": "m5.xlarge",
+        "estimated_daily_cost_usd": 4.61
+      },
+      "Thursday": {
+        "instance_type": "m5.xlarge",
+        "estimated_daily_cost_usd": 4.61
+      },
+      "Friday": {
+        "instance_type": "m5.xlarge",
+        "estimated_daily_cost_usd": 4.61
+      },
+      "Saturday": {
+        "instance_type": "t3.micro",
+        "estimated_daily_cost_usd": 0.25
+      },
+      "Sunday": {
+        "instance_type": "t3.micro",
+        "estimated_daily_cost_usd": 0.25
+      }
+    },
+    "time_slot_schedule": null,
+    "autoscaling_config": null,
+    "autoscaling_recommended": false,
+    "terminate_recommended": false,
+    "trend_alert": false,
+    "projected_cpu_in_4_weeks_pct": null,
+    "risk_flags": [],
+    "notes": "Recommended instance types based on day-of-week CPU profile",
+    "current_monthly_cost_usd": 280.32,
+    "new_monthly_cost_usd": 101.97,
+    "estimated_monthly_saving_usd": 178.35,
+    "saving_pct": 63.6,
+    "instance_name": "Auto-CAT-2 Server",
+    "current_type": "m5.2xlarge",
+    "region": "us-east-1",
+    "category_label": "Day-Patterned",
+    "recommendation_date": "2026-03-30",
+    "analysed_at": "2026-03-30T06:11:59.475706+00:00"
+  },
+  {
+    "instance_id": "i-6gh789ij012kl345g",
+    "category": "CAT-3",
+    "schedule_type": "time_slot",
+    "single_recommendation": null,
+    "day_of_week_schedule": null,
+    "time_slot_schedule": [
+      {
+        "day": "Monday",
+        "scale_up_time": "08:45",
+        "scale_down_time": "17:30",
+        "peak_instance_type": "m5.xlarge",
+        "idle_instance_type": "t3.micro",
+        "crosses_midnight": false,
+        "peak_hours_per_day": 8.75,
+        "idle_hours_per_day": 15.25,
+        "peak_cost_per_day_usd": 1.68,
+        "idle_cost_per_day_usd": 0.16,
+        "total_cost_per_day_usd": 1.84
+      },
+      {
+        "day": "Thursday",
+        "scale_up_time": "08:45",
+        "scale_down_time": "17:30",
+        "peak_instance_type": "m5.xlarge",
+        "idle_instance_type": "t3.micro",
+        "crosses_midnight": false,
+        "peak_hours_per_day": 8.75,
+        "idle_hours_per_day": 15.25,
+        "peak_cost_per_day_usd": 1.68,
+        "idle_cost_per_day_usd": 0.16,
+        "total_cost_per_day_usd": 1.84
+      }
+    ],
+    "autoscaling_config": null,
+    "autoscaling_recommended": false,
+    "terminate_recommended": false,
+    "trend_alert": false,
+    "projected_cpu_in_4_weeks_pct": null,
+    "risk_flags": [],
+    "notes": "Periodic burst pattern with active days on Monday and Thursday, using current instance type m5.xlarge during peak hours and downsizing to t3.micro during idle hours.",
+    "current_monthly_cost_usd": 140.16,
+    "new_monthly_cost_usd": 21.34,
+    "estimated_monthly_saving_usd": 118.82,
+    "saving_pct": 84.8,
+    "instance_name": "Auto-CAT-3 Server",
+    "current_type": "m5.xlarge",
+    "region": "us-east-1",
+    "category_label": "Periodic Burst",
+    "recommendation_date": "2026-03-30",
+    "analysed_at": "2026-03-30T06:11:59.475706+00:00"
+  },
+  {
+    "instance_id": "i-7hi890jk123lm456h",
+    "category": "CAT-5",
+    "schedule_type": "terminate",
+    "single_recommendation": null,
+    "day_of_week_schedule": null,
+    "time_slot_schedule": null,
+    "autoscaling_config": null,
+    "autoscaling_recommended": false,
+    "terminate_recommended": true,
+    "trend_alert": false,
+    "projected_cpu_in_4_weeks_pct": null,
+    "risk_flags": [],
+    "notes": "Instance is a zombie with no active days and very low CPU usage, termination is recommended.",
+    "current_monthly_cost_usd": 30.37,
+    "new_monthly_cost_usd": 0.0,
+    "estimated_monthly_saving_usd": 30.37,
+    "saving_pct": 100.0,
+    "instance_name": "Auto-CAT-5 Server",
+    "current_type": "t3.medium",
+    "region": "us-east-1",
+    "category_label": "Zombie",
+    "recommendation_date": "2026-03-30",
+    "analysed_at": "2026-03-30T06:11:59.475706+00:00"
+  }
+]

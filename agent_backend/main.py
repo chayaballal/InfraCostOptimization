@@ -4,7 +4,7 @@
 ║                                                                  ║
 ║  • Pulls aggregated metrics from PostgreSQL                      ║
 ║  • Formats data optimally for LLM consumption                    ║
-║  • Streams Groq LLM response (llama-3.3-70b-versatile)           ║
+║  • Streams LLM response                                          ║
 ║  • Returns rightsizing, risk warnings, full markdown report      ║
 ╚══════════════════════════════════════════════════════════════════╝
 
@@ -29,7 +29,7 @@ It provides a REST API built with FastAPI to:
 Key Components:
 - FastAPI App: Configured with CORS for frontend interaction.
 - Database: Async connection to PostgreSQL for metrics and state.
-- LLM Service: Interface for streaming responses from Groq (Llama-3).
+- LLM Service: Interface for streaming responses from LLM.
 - Agents: Modular logic for analysis, cost calculation, and savings tracking.
 """
 
@@ -215,12 +215,32 @@ async def _get_current_instance_type(instance_id: str) -> Optional[str]:
 
 @app.get("/instances")
 async def list_instances():
-    """Returns unique instance IDs and names from local metrics file."""
+    """Returns unique instance IDs and names from the latest analysis or metrics file."""
+    # Try the latest schedule recommendations first (most recent)
+    sched_path = Path(__file__).parent / "data" / "schedule_recommendations.json"
+    if sched_path.exists():
+        try:
+            import json
+            with open(sched_path, "r") as f:
+                data = json.load(f)
+            instances = []
+            for r in data:
+                instances.append({
+                    "instance_id": r["instance_id"],
+                    "instance_name": r.get("instance_name") or "unnamed",
+                    "instance_type": r.get("current_type"),
+                    "az": r.get("az", "us-east-1a"),
+                    "platform": r.get("platform", "Linux")
+                })
+            return {"instances": instances}
+        except Exception as e:
+            log.error(f"Error reading schedule_recommendations.json: {e}")
+
+    # Fallback to parquet
     df = load_local_metrics()
     if df.empty:
         return {"instances": []}
 
-    # Deduplicate and format
     unique = df.drop_duplicates("instance_id")
     instances = []
     for _, r in unique.iterrows():
@@ -737,4 +757,177 @@ async def get_recommendations():
         log.error(f"Failed to read recommendations.parquet: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# ── Schedule-Aware Endpoints ─────────────────────────────────────
+
+
+@app.get("/schedule-recommendations")
+async def get_schedule_recommendations():
+    """
+    Returns the full schedule-aware recommendations from the JSON file.
+    The JSON preserves nested structures (day_of_week_schedule, time_slot_schedule, etc.)
+    needed by the frontend Schedule tab.
+    """
+    json_file = Path(__file__).parent / "data" / "schedule_recommendations.json"
+    if not json_file.exists():
+        return {"recommendations": [], "summary": {}}
+
+    try:
+        with open(json_file) as f:
+            recs = json.load(f)
+
+        # Build summary
+        total_current = sum(r.get("current_monthly_cost_usd", 0) for r in recs)
+        total_new = sum(r.get("new_monthly_cost_usd", 0) for r in recs)
+        total_saving = sum(r.get("estimated_monthly_saving_usd", 0) for r in recs)
+
+        cat_counts: dict = {}
+        status_counts: dict = {"Proposed": 0, "Approved": 0, "Implemented": 0}
+        for r in recs:
+            # Category counts
+            c = r.get("category", "unknown")
+            cat_counts[c] = cat_counts.get(c, 0) + 1
+            
+            # Status counts
+            s = r.get("status", "Proposed")
+            r["status"] = s
+            if s in status_counts:
+                status_counts[s] += 1
+            else:
+                status_counts[s] = 1
+
+        summary = {
+            "total_instances": len(recs),
+            "total_current_monthly_cost_usd": round(total_current, 2),
+            "total_new_monthly_cost_usd": round(total_new, 2),
+            "total_estimated_monthly_saving_usd": round(total_saving, 2),
+            "total_estimated_annual_saving_usd": round(total_saving * 12, 2),
+            "instances_by_category": cat_counts,
+            "status_counts": status_counts,
+            "terminate_candidates": sum(1 for r in recs if r.get("terminate_recommended")),
+            "autoscaling_candidates": sum(1 for r in recs if r.get("autoscaling_recommended")),
+            "trend_alerts": sum(1 for r in recs if r.get("trend_alert")),
+        }
+
+
+        return {"recommendations": recs, "summary": summary}
+
+    except Exception as e:
+        log.error(f"Failed to read schedule_recommendations.json: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/schedule-summary")
+async def get_schedule_summary():
+    """
+    Fleet-wide schedule summary for the top cards in the Schedule tab.
+    """
+    result = await get_schedule_recommendations()
+    return result.get("summary", {})
+
+
+@app.patch("/schedule-recommendations/{instance_id}")
+async def update_schedule_status(instance_id: str, status: str):
+    """
+    Updates the status field for a specific schedule recommendation in the local JSON file.
+    Valid statuses: 'Proposed', 'Approved', 'Implemented'
+    """
+    json_file = Path(__file__).parent / "data" / "schedule_recommendations.json"
+    if not json_file.exists():
+        raise HTTPException(status_code=404, detail="Schedule recommendations file not found.")
+
+    try:
+        with open(json_file, "r") as f:
+            recs = json.load(f)
+
+        found = False
+        for r in recs:
+            if r["instance_id"] == instance_id:
+                r["status"] = status
+                found = True
+                break
+
+        if not found:
+            raise HTTPException(status_code=404, detail=f"Instance {instance_id} not found in recommendations.")
+
+        with open(json_file, "w") as f:
+            json.dump(recs, f, indent=2)
+
+        return {"status": "success", "instance_id": instance_id, "new_status": status}
+    except Exception as e:
+        log.error(f"Failed to update schedule status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/schedule-recommendations/{instance_id}")
+async def get_schedule_recommendation_detail(instance_id: str):
+    """
+    Returns the full recommendation object for a single instance,
+    including nested schedule details.
+    """
+    result = await get_schedule_recommendations()
+    recs = result.get("recommendations", [])
+    for rec in recs:
+        if rec.get("instance_id") == instance_id:
+            return rec
+    raise HTTPException(status_code=404, detail=f"Instance {instance_id} not found.")
+
+
+
+@app.post("/run-schedule-agent")
+async def run_schedule_agent_endpoint():
+    """
+    Triggers the schedule-aware recommendation agent script.
+    Streams its output back as SSE events.
+    """
+    import sys
+    script_path = Path(__file__).parent / "agents" / "analysis" / "schedule_agent.py"
+    cmd = [sys.executable, str(script_path)]
+    log.info(f"Executing schedule agent: {cmd}")
+
+    async def stream_process():
+        q = asyncio.Queue()
+        loop = asyncio.get_event_loop()
+        project_root = Path(__file__).parent.parent
+
+        def producer():
+            import subprocess
+            try:
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    cwd=str(project_root),
+                    text=True,
+                    bufsize=1,
+                )
+                stdout = process.stdout
+                if stdout is not None:
+                    for line in iter(stdout.readline, ''):
+                        if line:
+                            loop.call_soon_threadsafe(q.put_nowait, line)
+                process.wait()
+            except Exception as e:
+                loop.call_soon_threadsafe(q.put_nowait, f"Error starting process: {e}\n")
+            finally:
+                loop.call_soon_threadsafe(q.put_nowait, None)
+
+        _ = asyncio.create_task(asyncio.to_thread(producer))
+
+        while True:
+            line = await q.get()
+            if line is None:
+                break
+            yield f"data: {json.dumps({'token': line})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        stream_process(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
 
